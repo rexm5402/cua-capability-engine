@@ -200,20 +200,139 @@ def _viewport(obs: Observation) -> tuple[float, float]:
 
 
 # --------------------------------------------------------------------------
+# Scope-then-unique: narrow the pool to one container region, THEN require a
+# unique match inside it.
+#
+# The region is derived exactly the way the anchor-relative tier reasons about
+# rows: find the node(s) carrying ``scope_text``, then take the SAME_ROW band
+# around each (same ``frame_path``, same-row per :func:`_same_row`, i.e. the
+# same half-height + ROW_SLACK_PX tolerance the ANCHOR_RELATIVE tier uses).
+# Nodes with no bbox cannot be banded geometrically, so they fall back to the
+# tree-order run that follows the anchor -- the same dom-order fallback the
+# anchor tier uses when geometry is unavailable.
+# --------------------------------------------------------------------------
+
+
+def _tree_band(anchor: Node, obs: Observation) -> list[Node]:
+    """DOM-order banding: the contiguous run of same-frame nodes starting at
+    the anchor and ending before the next node that plays the anchor's own
+    role (i.e. the next row's identifying cell)."""
+    nodes = list(obs.nodes)
+    ai = next((i for i, n in enumerate(nodes) if n.ref == anchor.ref), None)
+    if ai is None:
+        return []
+    band = [nodes[ai]]
+    for n in nodes[ai + 1 :]:
+        if n.frame_path != anchor.frame_path:
+            break
+        if _role_eq(n.role, anchor.role):
+            break
+        band.append(n)
+    return band
+
+
+def _band_of(anchor: Node, obs: Observation) -> list[Node]:
+    """All nodes belonging to the anchor's region."""
+    same_frame = [n for n in obs.nodes if n.frame_path == anchor.frame_path]
+    if anchor.bbox is None:
+        return _tree_band(anchor, obs)
+    band = {
+        n.ref: n
+        for n in same_frame
+        if n.bbox is not None and (n.ref == anchor.ref or _same_row(anchor.bbox, n.bbox))
+    }
+    # Nodes with no geometry cannot be banded by row; use the dom-order run.
+    if any(n.bbox is None for n in same_frame):
+        for n in _tree_band(anchor, obs):
+            if n.bbox is None:
+                band.setdefault(n.ref, n)
+    return list(band.values())
+
+
+def _scope_region(scope_text: str, obs: Observation) -> tuple[list[Node] | None, str]:
+    """Return (region nodes, note). ``None`` means the scope did not yield
+    exactly one region; the note says why. Never falls back to the global pool.
+    """
+    anchors = _find_anchors(scope_text, obs)
+    if not anchors:
+        return None, f"scope_text {scope_text!r} matched no node in this observation"
+
+    groups: list[tuple[set[str], dict[str, Node]]] = []
+    for anchor in anchors:
+        band = _band_of(anchor, obs)
+        refs = {n.ref for n in band} | {anchor.ref}
+        merged: tuple[set[str], dict[str, Node]] | None = None
+        for g in list(groups):
+            if g[0] & refs:
+                if merged is None:
+                    g[0].update(refs)
+                    g[1].update({n.ref: n for n in band})
+                    merged = g
+                else:
+                    merged[0].update(g[0])
+                    merged[1].update(g[1])
+                    groups.remove(g)
+        if merged is None:
+            groups.append((set(refs), {n.ref: n for n in band}))
+
+    if len(groups) > 1:
+        return None, (
+            f"scope_text {scope_text!r} is ambiguous: it matched "
+            f"{len(anchors)} node(s) spanning {len(groups)} disjoint regions"
+        )
+    region = list(groups[0][1].values())
+    order = {n.ref: i for i, n in enumerate(obs.nodes)}
+    region.sort(key=lambda n: order.get(n.ref, 0))
+    return region, f"scoped to region of {scope_text!r} ({len(region)} node(s))"
+
+
+# --------------------------------------------------------------------------
 # Public entry point
 # --------------------------------------------------------------------------
 
 
 def resolve(bundle: LocatorBundle, obs: Observation) -> Resolution:
-    """Resolve ``bundle`` against ``obs``, tier by tier, unique-or-nothing."""
+    """Resolve ``bundle`` against ``obs``, tier by tier, unique-or-nothing.
+
+    When ``bundle.scope_text`` is set the candidate pool is first narrowed to
+    the single container region holding that text, and the unique-match rule is
+    then applied WITHIN that region. If the scope text matches nothing, or
+    matches several disjoint regions, resolution fails outright -- falling back
+    to the global pool would quietly reintroduce guessing.
+    """
     notes: list[str] = []
     last_candidates = 0
+    viewport = _viewport(obs)
+    scope_note = "unscoped"
+    pool = obs
+    if bundle.scope_text is not None:
+        region, note = _scope_region(bundle.scope_text, obs)
+        scope_note = note
+        if region is None:
+            return Resolution(
+                node=None,
+                tier=None,
+                candidates=0,
+                reason=(
+                    f"unresolved for {bundle.description!r} on {obs.url!r}: {note}"
+                ),
+            )
+        pool = Observation(
+            url=obs.url,
+            title=obs.title,
+            nodes=tuple(region),
+            screenshot_path=obs.screenshot_path,
+            text_digest=obs.text_digest,
+        )
     for strategy in bundle.by_tier():
         tier = int(strategy.tier)
-        result = _apply(strategy, obs)
+        result = _apply(strategy, pool, viewport)
         last_candidates = result.candidates
         if result.node is not None:
-            reason = f"resolved at tier {tier} ({strategy.tier.name}): {result.note}"
+            reason = (
+                f"resolved at tier {tier} ({strategy.tier.name}) "
+                f"[{scope_note}]: {result.note}"
+            )
             if notes:
                 reason = "; ".join(notes) + " -> " + reason
             return Resolution(
@@ -232,15 +351,18 @@ def resolve(bundle: LocatorBundle, obs: Observation) -> Resolution:
         candidates=last_candidates,
         reason=(
             f"unresolved for {bundle.description!r} across "
-            f"{len(bundle.strategies)} strategie(s) on {obs.url!r}: "
-            + " | ".join(notes)
+            f"{len(bundle.strategies)} strategie(s) on {obs.url!r} "
+            f"[{scope_note}]: " + " | ".join(notes)
             if notes
-            else f"unresolved for {bundle.description!r}: bundle had no strategies"
+            else f"unresolved for {bundle.description!r} [{scope_note}]: "
+            "bundle had no strategies"
         ),
     )
 
 
-def _apply(strategy, obs: Observation) -> _TierResult:
+def _apply(
+    strategy, obs: Observation, viewport: tuple[float, float] | None = None
+) -> _TierResult:
     if isinstance(strategy, SemanticLocator):
         return _semantic(strategy, obs)
     if isinstance(strategy, AnchorRelativeLocator):
@@ -250,7 +372,7 @@ def _apply(strategy, obs: Observation) -> _TierResult:
     if isinstance(strategy, StructuralLocator):
         return _structural(strategy, obs)
     if isinstance(strategy, GeometryLocator):
-        return _geometry(strategy, obs)
+        return _geometry(strategy, obs, viewport)
     return _TierResult(None, 0, f"unknown strategy type {type(strategy).__name__}")
 
 
@@ -440,8 +562,13 @@ def _structural(s: StructuralLocator, obs: Observation) -> _TierResult:
 # --------------------------------------------------------------------------
 
 
-def _geometry(s: GeometryLocator, obs: Observation) -> _TierResult:
-    vw, vh = _viewport(obs)
+def _geometry(
+    s: GeometryLocator, obs: Observation, viewport: tuple[float, float] | None = None
+) -> _TierResult:
+    # The viewport is always the FULL observation's extent, even when the pool
+    # has been scoped -- otherwise scoping would silently rescale the recorded
+    # normalized coordinates.
+    vw, vh = viewport if viewport is not None else _viewport(obs)
     tx, ty = s.x + s.w / 2.0, s.y + s.h / 2.0
     what = f"normalized centre=({tx:.3f},{ty:.3f}) threshold={GEOMETRY_MAX_DIST}"
     scored = []
