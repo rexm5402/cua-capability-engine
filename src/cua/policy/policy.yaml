@@ -1,0 +1,42 @@
+# Default policy: scoped to the local fixture app and nothing else.
+#
+# Read this as a whitelist with no implicit tail. Anything absent is denied --
+# there is no "allow the rest" clause and the loader will not invent one.
+name: localhost-fixture
+mode: unattended
+
+allowed_origins:
+  - "http://localhost:5055"
+
+# fnmatch patterns against path (+ ?query when present).
+allowed_routes:
+  - "/"
+  - "/login"
+  - "/search"
+  - "/search?*"
+  - "/members"
+  - "/members/*"
+  - "/claims"
+  - "/claims/*"
+
+allowed_action_types:
+  - navigate
+  - click
+  - type
+  - select
+  - press
+  - read
+  - wait
+
+risk_rules:
+  read_only:
+    allowed: true
+    require_approval: false
+  reversible:
+    allowed: true
+    require_approval: false
+  irreversible:
+    # Denied outright in unattended mode regardless of this flag; in attended
+    # mode it becomes a RequireApproval routed to the human escalation channel.
+    allowed: true
+    require_approval: true
