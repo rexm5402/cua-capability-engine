@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .env
-evidence/runs/
-*.zip
+# Scratch runs only. Curated evidence under evidence/ IS a graded deliverable
+# and must be committed -- see REPORT.md.
+evidence/scratch/

@@ -1,0 +1,31 @@
+{% extends "_chrome.html" %}
+{% set page_title = cfg.messages.login_prompt %}
+{% block content %}
+{# Login is the one page NOT inside a frameset -- matching real apps where the
+   sign-on screen is standalone and the desktop is framed. Fields still use
+   junk names (ctl00_u1) but carry real <label for> + adjacent label cells. #}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td>
+ <table border="0" cellpadding="0" cellspacing="0"><tr><td>
+  <b>{{ cfg.institution }}</b><br><br>
+  {% if msg %}<div class="msgBox"><span class="errTxt">{{ msg }}</span></div><br>{% endif %}
+  <form method="post" action="">
+  <table border="0" cellpadding="2" cellspacing="0">
+    <tr>
+      <td class="lbl"><label for="ctl00_u1">Operator ID</label></td>
+      <td class="fld"><input type="text" id="ctl00_u1" name="ctl00_u1" size="20" maxlength="20" value=""></td>
+    </tr>
+    <tr>
+      <td class="lbl"><label for="ctl00_p1">Password</label></td>
+      <td class="fld"><input type="password" id="ctl00_p1" name="ctl00_p1" size="20" maxlength="20"></td>
+    </tr>
+    <tr>
+      <td class="lbl">&nbsp;</td>
+      <td class="fld"><input type="submit" name="ctl00_go" value="Sign On"></td>
+    </tr>
+  </table>
+  </form>
+  <hr>
+  <font size="1">Demonstration fixture. Any non-empty credentials are accepted; use demo / demo.</font>
+ </td></tr></table>
+</td></tr></table>
+{% endblock %}

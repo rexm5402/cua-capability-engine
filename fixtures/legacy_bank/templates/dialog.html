@@ -1,0 +1,22 @@
+{# Interstitial. Rendered at TOP level (not in a frame), so it replaces the
+   whole frameset and must be dismissed with Continue before the requested
+   page appears. The injected mode has already disarmed, so Continue works. #}
+{% extends "_chrome.html" %}
+{% set page_title = cfg.messages.dialog_title %}
+{% block content %}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center">
+ <table class="wnd" border="0" cellpadding="0" cellspacing="0" width="420"><tr><td>
+  <table width="100%" border="0" cellpadding="0" cellspacing="0"><tr>
+    <td bgcolor="{{ cfg.colors.chrome }}" class="ttl"><font color="{{ cfg.colors.chrome_text }}">{{ cfg.messages.dialog_title }}</font></td>
+  </tr></table>
+  <table width="100%" border="0" cellpadding="12" cellspacing="0"><tr>
+    <td align="center">
+      {{ cfg.messages.dialog_body }}<br><br>
+      <form method="get" action="{{ back }}">
+        <input type="submit" name="ctl00_ack" value="{{ cfg.messages.dialog_button }}">
+      </form>
+    </td>
+  </tr></table>
+ </td></tr></table>
+</td></tr></table>
+{% endblock %}

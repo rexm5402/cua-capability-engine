@@ -1,0 +1,26 @@
+{% extends "_chrome.html" %}
+{% set page_title = "Member Detail" %}
+{% block content %}
+{# Balances live in a two-column table where the left <td> is the only thing
+   naming the value in the right <td>. No ids, no testids -- adjacency only. #}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td>
+ <table border="1" cellpadding="0" cellspacing="0" bordercolor="#808080" width="100%"><tr><td>
+  <table border="0" cellpadding="3" cellspacing="0" width="100%">
+   <tr><td colspan="2" class="gridHdr">Member Record {{ m.id }}</td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.member_id }}</td><td class="fld gridRow">{{ m.id }}</td></tr>
+   <tr><td class="lbl gridRow_alt">Member Name</td><td class="fld gridRow_alt">{{ m.name }}</td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.branch }}</td><td class="fld gridRow">{{ m.branch }}</td></tr>
+   <tr><td class="lbl gridRow_alt">Status</td><td class="fld gridRow_alt">{{ m.status }}</td></tr>
+   <tr><td class="lbl gridRow">Date Opened</td><td class="fld gridRow">{{ m.opened }}</td></tr>
+   <tr><td class="lbl gridRow_alt">{{ cfg.labels.savings }}</td><td class="fld gridRow_alt"><b>$ {{ m.savings }}</b></td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.checking }}</td><td class="fld gridRow"><b>$ {{ m.checking }}</b></td></tr>
+  </table>
+ </td></tr></table>
+ <br>
+ <table border="0" cellpadding="0" cellspacing="0"><tr>
+   <td><a href="{{ new_sub }}" target="_top">Open New Sub-Account</a></td>
+   <td>&nbsp;&nbsp;|&nbsp;&nbsp;</td>
+   <td><a href="{{ back }}" target="_top">Return to Member Search</a></td>
+ </tr></table>
+</td></tr></table>
+{% endblock %}

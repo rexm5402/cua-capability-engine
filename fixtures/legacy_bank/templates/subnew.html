@@ -1,0 +1,84 @@
+{% extends "_chrome.html" %}
+{% set page_title = "Open Sub-Account" %}
+{% block content %}
+{# Six fields, all named ctl00_xN / f_NN. Each has a <label for> pointing at a
+   matching junk id AND a label cell immediately to its left. Field-level
+   errors render as a red line in the row of the offending field, which is how
+   these apps actually report validation. #}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td>
+ <b>Member:</b> {{ m.name if m else mid }} &nbsp; ({{ cfg.labels.member_id }} {{ mid }})<br><br>
+ {% if err %}
+ <div class="msgBox"><span class="errTxt">{{ err.msg }}</span></div><br>
+ {% endif %}
+ <form method="post" action="{{ post_to }}" target="_top">
+ <table border="1" cellpadding="0" cellspacing="0" bordercolor="#808080"><tr><td>
+  <table border="0" cellpadding="3" cellspacing="0">
+   <tr><td colspan="2" class="gridHdr">New Sub-Account Request</td></tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.product }}">{{ cfg.labels.product }}</label></td>
+     <td class="fld">
+       <select id="{{ F.product }}" name="{{ F.product }}">
+         <option value=""></option>
+         {% for code, desc in products %}
+         <option value="{{ code }}"{% if err and err.vals.product == code %} selected{% endif %}>{{ code }} - {{ desc }}</option>
+         {% endfor %}
+       </select>
+       {% if err and err.field == 'product' %}<br><span class="errTxt">{{ err.msg }}</span>{% endif %}
+     </td>
+   </tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.nickname }}">{{ cfg.labels.nickname }}</label></td>
+     <td class="fld"><input type="text" id="{{ F.nickname }}" name="{{ F.nickname }}" size="28" maxlength="30" value="{{ err.vals.nickname if err else '' }}"></td>
+   </tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.initial_deposit }}">{{ cfg.labels.initial_deposit }}</label></td>
+     <td class="fld">
+       <input type="text" id="{{ F.initial_deposit }}" name="{{ F.initial_deposit }}" size="12" maxlength="12" value="{{ err.vals.initial_deposit if err else '' }}">
+       {% if err and err.field == 'initial_deposit' %}<br><span class="errTxt">{{ err.msg }}</span>{% endif %}
+     </td>
+   </tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.funding_source }}">{{ cfg.labels.funding_source }}</label></td>
+     <td class="fld">
+       <select id="{{ F.funding_source }}" name="{{ F.funding_source }}">
+         {% for code, desc in sources %}
+         <option value="{{ code }}"{% if err and err.vals.funding_source == code %} selected{% endif %}>{{ desc }}</option>
+         {% endfor %}
+       </select>
+     </td>
+   </tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.statement_pref }}">{{ cfg.labels.statement_pref }}</label></td>
+     <td class="fld">
+       <select id="{{ F.statement_pref }}" name="{{ F.statement_pref }}">
+         <option value="PAPER">Paper</option>
+         <option value="ELEC">Electronic</option>
+       </select>
+     </td>
+   </tr>
+
+   <tr>
+     <td class="lbl"><label for="{{ F.effective_date }}">{{ cfg.labels.effective_date }}</label></td>
+     <td class="fld">
+       <input type="text" id="{{ F.effective_date }}" name="{{ F.effective_date }}" size="12" maxlength="10" value="{{ err.vals.effective_date if err else '' }}">
+       <font size="1">(YYYY-MM-DD)</font>
+       {% if err and err.field == 'effective_date' %}<br><span class="errTxt">{{ err.msg }}</span>{% endif %}
+     </td>
+   </tr>
+
+   <tr>
+     <td class="lbl">&nbsp;</td>
+     <td class="fld"><input type="submit" name="ctl00_ok" value="{{ cfg.labels.submit_button }}"></td>
+   </tr>
+  </table>
+ </td></tr></table>
+ </form>
+ <br>
+ <a href="{{ back }}" target="_top">Cancel and return to Member Detail</a>
+</td></tr></table>
+{% endblock %}

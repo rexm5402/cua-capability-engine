@@ -1,0 +1,23 @@
+{% extends "_chrome.html" %}
+{% set page_title = "Request Confirmation" %}
+{% block content %}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td>
+ <div class="msgBox"><b>{{ cfg.messages.confirm_headline }}</b></div>
+ <br>
+ <table border="1" cellpadding="0" cellspacing="0" bordercolor="#808080"><tr><td>
+  <table border="0" cellpadding="3" cellspacing="0">
+   <tr><td colspan="2" class="gridHdr">Confirmation</td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.reference }}</td><td class="fld gridRow"><b>{{ ref }}</b></td></tr>
+   <tr><td class="lbl gridRow_alt">{{ cfg.labels.member_id }}</td><td class="fld gridRow_alt">{{ mid }}</td></tr>
+   <tr><td class="lbl gridRow">Member Name</td><td class="fld gridRow">{{ m.name if m else '-' }}</td></tr>
+   <tr><td class="lbl gridRow_alt">{{ cfg.labels.product }}</td><td class="fld gridRow_alt">{{ sub.get('product','-') }} {{ products.get(sub.get('product',''),'') }}</td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.nickname }}</td><td class="fld gridRow">{{ sub.get('nickname','-') }}</td></tr>
+   <tr><td class="lbl gridRow_alt">{{ cfg.labels.initial_deposit }}</td><td class="fld gridRow_alt">$ {{ sub.get('initial_deposit','-') }}</td></tr>
+   <tr><td class="lbl gridRow">{{ cfg.labels.funding_source }}</td><td class="fld gridRow">{{ sources.get(sub.get('funding_source',''),'-') }}</td></tr>
+   <tr><td class="lbl gridRow_alt">{{ cfg.labels.effective_date }}</td><td class="fld gridRow_alt">{{ sub.get('effective_date','-') }}</td></tr>
+  </table>
+ </td></tr></table>
+ <br>
+ <a href="{{ back }}" target="_top">Return to Member Detail</a>
+</td></tr></table>
+{% endblock %}

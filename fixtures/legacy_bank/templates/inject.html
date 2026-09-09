@@ -1,0 +1,18 @@
+{% extends "_chrome.html" %}
+{% set page_title = "Fault Injection Console" %}
+{% block content %}
+{# Operator-facing test console. Not part of the business flow; it exists so a
+   harness can arm a condition out-of-band instead of via a query string. #}
+<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td>
+ <div class="msgBox">
+  {% if state == 'armed' %}Injection <b>{{ mode }}</b> is armed and will fire once on the next relevant request.
+  {% elif state == 'cleared' %}All injections cleared.
+  {% else %}<span class="errTxt">Unknown injection mode: {{ mode }}</span>{% endif %}
+ </div><br>
+ <table border="0" cellpadding="2" cellspacing="0">
+  <tr><td class="gridHdr">Available modes</td></tr>
+  {% for m in modes %}<tr><td class="{{ loop.cycle('gridRow','gridRow_alt') }}">{{ m }}</td></tr>{% endfor %}
+ </table>
+ <br><a href="{{ home }}">Return to application</a>
+</td></tr></table>
+{% endblock %}

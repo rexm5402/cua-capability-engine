@@ -1,0 +1,21 @@
+<!-- HTML 4.01 Frameset. The top document carries NO content at all: the only
+     way to reach a control is to descend into the "workArea" frame. This is
+     the single biggest hostility in the fixture and it is deliberate. -->
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Frameset//EN">
+<html>
+<head>
+<title>{{ cfg.institution }} - {{ cfg.product }} - {{ title }}</title>
+</head>
+<frameset rows="74,*" border="1" frameborder="1">
+  <frame name="bannerArea" src="{{ banner }}" scrolling="no" noresize>
+  <frameset cols="*" border="1">
+    <frame name="workArea" src="{{ work }}" scrolling="auto">
+  </frameset>
+  <noframes>
+  <body>
+    <p>This application requires a frames-capable browser.
+       <a href="{{ work }}">Continue to {{ title }}</a>.</p>
+  </body>
+  </noframes>
+</frameset>
+</html>

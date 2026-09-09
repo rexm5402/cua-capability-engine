@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 SCHEMA_VERSION = "1.0"
 
@@ -100,6 +100,14 @@ class LocatorBundle(BaseModel):
 
     description: str = Field(description="Human-readable, e.g. 'the Search button'.")
     strategies: list[LocatorStrategy] = Field(min_length=1)
+    scope_text: str | None = Field(
+        default=None,
+        description="Restrict candidates to the container region holding this "
+        "text, THEN require a unique match within it. A results grid has eight "
+        "identical 'View' buttons; a globally-unique rule would make every "
+        "list interaction fail, while taking the first would be guessing. "
+        "Scope-then-unique keeps the no-guessing rule and makes lists workable.",
+    )
 
     def by_tier(self) -> list[LocatorStrategy]:
         return sorted(self.strategies, key=lambda s: int(s.tier))
@@ -131,10 +139,33 @@ class ParamSpec(BaseModel):
 
 class OutputSpec(BaseModel):
     name: str
-    type: Literal["string", "integer", "number", "boolean"]
+    type: Literal["string", "integer", "number", "boolean", "array", "object"]
     description: str
     source_step_id: str
     sensitivity: Sensitivity = Sensitivity.PUBLIC
+    item_type: Literal["string", "integer", "number", "boolean", "object"] | None = (
+        Field(default=None, description="Element type when type == 'array'.")
+    )
+    shape: dict[str, str] | None = Field(
+        default=None,
+        description="Field name -> type, when type or item_type is 'object'. "
+        "A capability that returns a list of sub-accounts is ordinary; scalars "
+        "alone cannot express it.",
+    )
+
+
+class OutcomeSpec(BaseModel):
+    """A business outcome this capability can legitimately return.
+
+    Declared in the contract so a calling agent knows 'record_not_found' is a
+    possible ANSWER. Without this the caller sees only input_schema, treats an
+    unexpected outcome as an error, and reintroduces exactly the confusion the
+    three-type result union exists to prevent.
+    """
+
+    code: str
+    description: str
+    partial_outputs: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -160,10 +191,22 @@ class RiskClass(str, Enum):
 
 class ValueRef(BaseModel):
     """A step's value is either a literal or a reference to a typed input.
-    Sensitive values are NEVER literals; they bind late, at replay time."""
+
+    Late binding is not optional for sensitive data. The discovery agent emits
+    only `param` references and never a raw value; the ENGINE substitutes the
+    real value at the moment of action. Without this the model would be asked
+    to reason about a placeholder and would type the literal string
+    "<param:member_id>" into the field.
+    """
 
     literal: str | None = None
     param: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "ValueRef":
+        if (self.literal is None) == (self.param is None):
+            raise ValueError("ValueRef needs exactly one of literal or param")
+        return self
 
 
 class Checkpoint(BaseModel):
@@ -217,11 +260,50 @@ class Step(BaseModel):
     risk: RiskClass = RiskClass.READ_ONLY
     timeout_ms: int = 10_000
     retries: int = 0
+    baseline_tier: int | None = Field(
+        default=None,
+        description="The locator tier that resolved this step at record time. "
+        "Drift is deviation from THIS, not from tier 1 -- a hostile surface may "
+        "legitimately resolve at tier 2 from day one, which would make a "
+        "fixed 'above tier 1 means drift' rule fire constantly and mean nothing.",
+    )
+
+    @model_validator(mode="after")
+    def _writes_must_verify(self) -> "Step":
+        """Determinism depends on every state-changing step proving it landed.
+        Enforced by the schema rather than trusted to the compiler."""
+        state_changing = {
+            ActionType.CLICK,
+            ActionType.TYPE,
+            ActionType.SELECT,
+            ActionType.PRESS,
+            ActionType.NAVIGATE,
+        }
+        if self.action in state_changing and self.post_condition is None:
+            raise ValueError(
+                f"step {self.id!r}: {self.action.value} is state-changing and "
+                "requires a post_condition"
+            )
+        return self
 
 
 # --------------------------------------------------------------------------
 # The artifact itself.
 # --------------------------------------------------------------------------
+
+
+class AuthRequirement(BaseModel):
+    """Authentication is a PRECONDITION, not steps.
+
+    Credentials are the one thing that must never be recorded, so artifacts
+    begin post-authentication and a SessionProvider establishes the context
+    beforehand. This also supplies the re-auth path when a session-expiry
+    signal fires mid-replay.
+    """
+
+    required: bool = True
+    provider: str = "session_provider"
+    scope: str | None = None
 
 
 class AppProfileRef(BaseModel):
@@ -246,14 +328,17 @@ class Provenance(BaseModel):
         description="When the artifact was proven by a real LLM-free replay. "
         "An artifact without this was never allowed to be saved.",
     )
-
-
-class StabilityStats(BaseModel):
-    replays: int = 0
-    successes: int = 0
-    tier_escalations: int = Field(
-        default=0,
-        description="Resolutions above SEMANTIC. The drift early-warning signal.",
+    verification_mode: Literal["full_replay", "dry_run", "none"] = Field(
+        default="none",
+        description="full_replay: re-executed end to end with a DIFFERENT input "
+        "than discovery used, so a literal baked in place of a parameter fails "
+        "verification. dry_run: executed to the last safe step, then remaining "
+        "locators resolved without acting -- used for write capabilities, "
+        "because verifying 'open a sub-account' by replaying it would create a "
+        "second real record.",
+    )
+    verified_with_inputs: dict[str, str] | None = Field(
+        default=None, description="Non-sensitive inputs used for verification."
     )
 
 
@@ -281,10 +366,16 @@ class Capability(BaseModel):
     success: Checkpoint
     signals: list[SignalRule] = Field(default_factory=list)
 
+    possible_outcomes: list[OutcomeSpec] = Field(default_factory=list)
+    auth: AuthRequirement = Field(default_factory=AuthRequirement)
+
     risk_class: RiskClass = RiskClass.READ_ONLY
     approval_state: ApprovalState = ApprovalState.DRAFT
     provenance: Provenance
-    stability: StabilityStats = Field(default_factory=StabilityStats)
+    # NOTE: stability/telemetry deliberately does NOT live here. It mutates on
+    # every replay; keeping it on the artifact would churn the hash of a
+    # supposedly immutable, versioned, reviewable document without its
+    # behaviour changing. See cua.telemetry.
 
     def tool_schema(self) -> dict[str, Any]:
         """JSON Schema for a calling agent. The point of the whole exercise:
@@ -305,4 +396,12 @@ class Capability(BaseModel):
                 "properties": props,
                 "required": required,
             },
+            "outputs": {
+                o.name: {"type": o.type, "description": o.description}
+                for o in self.outputs
+            },
+            "possible_outcomes": [
+                {"code": o.code, "description": o.description}
+                for o in self.possible_outcomes
+            ],
         }

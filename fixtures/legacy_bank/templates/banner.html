@@ -1,0 +1,21 @@
+{# Banner frame. Holds the sign-off link and, for the operator's benefit, the
+   currently armed fault-injection mode. Nested tables again. #}
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html><head><title>{{ cfg.institution }}</title>
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='legacy.css') }}"></head>
+<body bgcolor="{{ cfg.colors.chrome }}" style="margin:0">
+<table width="100%" border="0" cellpadding="4" cellspacing="0"><tr>
+  <td><table border="0" cellpadding="0" cellspacing="0"><tr><td>
+    <font color="{{ cfg.colors.chrome_text }}" size="4"><b>{{ cfg.institution }}</b></font><br>
+    <font color="{{ cfg.colors.chrome_text }}" size="1">{{ cfg.product }} &nbsp; Operator: {{ uid }}
+    {% if armed %}&nbsp; [inject armed: {{ armed }}]{% endif %}</font>
+  </td></tr></table></td>
+  <td align="right">
+    <font color="{{ cfg.colors.chrome_text }}" size="1">
+      <a href="{{ search }}" target="_top"><font color="{{ cfg.colors.chrome_text }}">Member Search</font></a>
+      &nbsp;|&nbsp;
+      <a href="{{ logoff }}" target="_top"><font color="{{ cfg.colors.chrome_text }}">Sign Off</font></a>
+    </font>
+  </td>
+</tr></table>
+</body></html>

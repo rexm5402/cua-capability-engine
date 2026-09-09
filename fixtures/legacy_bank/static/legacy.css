@@ -1,0 +1,18 @@
+/* 1998 house style. Fixed-width, beveled, no rounded corners, no shadows.
+   Intentionally free of any layout system newer than <table>. */
+body { background: #c0c0c0; color: #000; font-family: "MS Sans Serif", Verdana, Geneva, sans-serif; font-size: 12px; margin: 0; padding: 0; }
+td, th, input, select { font-family: "MS Sans Serif", Verdana, Geneva, sans-serif; font-size: 12px; }
+a { color: #000080; }
+.wnd { border: 2px outset #ffffff; background: #e8e8e8; }
+.ttl { font-weight: bold; padding: 2px 5px; }
+.pnl { border: 2px inset #ffffff; background: #e8e8e8; padding: 6px; }
+.lbl { text-align: right; padding: 3px 6px 3px 10px; white-space: nowrap; }
+.fld { padding: 3px 10px 3px 0; }
+.gridHdr { background: #808080; color: #fff; font-weight: bold; padding: 2px 6px; }
+.gridRow { background: #ffffff; padding: 2px 6px; }
+.gridRow_alt { background: #dcdcdc; padding: 2px 6px; }
+.msgBox { border: 2px inset #ffffff; background: #ffffe1; padding: 8px 10px; }
+.errTxt { color: #a00000; font-weight: bold; }
+.ftr { font-size: 10px; color: #404040; padding: 6px; }
+input[type=text], input[type=password], select { border: 2px inset #ffffff; background: #ffffff; }
+hr { border: 0; border-top: 1px solid #808080; border-bottom: 1px solid #ffffff; }
