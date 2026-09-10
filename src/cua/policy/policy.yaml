@@ -16,8 +16,14 @@ allowed_routes:
   - "/search?*"
   - "/members"
   - "/members/*"
+  - "/member/*"
   - "/claims"
   - "/claims/*"
+  - "/f/*"          # the frameset's inner documents
+  - "/t/b/*"        # tenant B mount
+  # Deliberately absent: /member/*/subaccount/* -- opening a sub-account is an
+  # irreversible write, and it stays off the read-only demo allowlist so the
+  # gate has to be widened consciously rather than by default.
 
 allowed_action_types:
   - navigate

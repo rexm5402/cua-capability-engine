@@ -163,14 +163,31 @@ def _cy(b: tuple[float, float, float, float]) -> float:
     return b[1] + b[3] / 2.0
 
 
+def _row_slack(a: tuple[float, float, float, float],
+               t: tuple[float, float, float, float]) -> float:
+    """Slack derived from the boxes themselves, so it is UNIT-FREE.
+
+    An absolute pixel constant is wrong here: surfaces report geometry in
+    whatever space they like (this one normalizes to [0,1]), and a 6.0 "pixel"
+    tolerance against normalized coordinates is six times the viewport -- which
+    makes every node share a row with every other node and silently destroys
+    the tier. Scaling to the shorter box keeps the same intent (absorb border
+    and baseline jitter) in any coordinate space.
+    """
+    return 0.25 * min(a[3], t[3])
+
+
 def _same_row(a: tuple[float, float, float, float],
               t: tuple[float, float, float, float]) -> bool:
-    tol = max(a[3], t[3]) / 2.0 + ROW_SLACK_PX
+    # MUTUAL centre containment: each centre must fall inside the other's band.
+    # Using max() here instead lets a tall ancestor widen its own tolerance
+    # until it "shares a row" with content many rows away -- and in a table-soup
+    # accessibility tree those ancestors are everywhere.
+    slack = _row_slack(a, t)
+    tol = min(a[3], t[3]) / 2.0 + slack
     if abs(_cy(a) - _cy(t)) > tol:
         return False
-    # require genuine vertical overlap of the spans as well, so a tall anchor
-    # cannot "capture" a control two rows down.
-    return min(a[1] + a[3], t[1] + t[3]) - max(a[1], t[1]) > -ROW_SLACK_PX
+    return min(a[1] + a[3], t[1] + t[3]) - max(a[1], t[1]) > -slack
 
 
 def _v_overlap(a: tuple[float, float, float, float],
@@ -382,11 +399,89 @@ def _apply(
     return _TierResult(None, 0, f"unknown strategy type {type(strategy).__name__}")
 
 
+CONTAINMENT_SLACK = 0.004  # normalized; absorbs border/padding jitter
+
+
+def _area(n: Node) -> float:
+    return (n.bbox[2] * n.bbox[3]) if n.bbox else 0.0
+
+
+def _contains(outer: Node, inner: Node) -> bool:
+    """Is `inner` geometrically inside `outer`, and strictly smaller?"""
+    if not outer.bbox or not inner.bbox:
+        return False
+    ox, oy, ow, oh = outer.bbox
+    ix, iy, iw, ih = inner.bbox
+    inside = (
+        ix >= ox - CONTAINMENT_SLACK
+        and iy >= oy - CONTAINMENT_SLACK
+        and ix + iw <= ox + ow + CONTAINMENT_SLACK
+        and iy + ih <= oy + oh + CONTAINMENT_SLACK
+    )
+    return inside and _area(inner) < _area(outer) - 1e-9
+
+
+def _depth(n: Node) -> int:
+    return n.dom_path.count("/") if n.dom_path else 0
+
+
+def _collapse_nested(nodes: list[Node]) -> list[Node]:
+    """Drop ancestors when one of their descendants is also a candidate.
+
+    Table-soup accessibility trees nest cells many levels deep, and an ancestor
+    cell inherits the CONCATENATED accessible name of everything inside it
+    while sharing its child's bounding box. Treating that stack as "several
+    matches" would report ambiguity for what is visually ONE control, and would
+    make the anchor tier useless on exactly the surfaces it exists to serve.
+
+    Nesting is not ambiguity: an ancestor and its descendant are the same thing
+    at different depths, so we keep the innermost. Genuinely distinct
+    side-by-side controls are untouched, so the unique-match rule still holds
+    where it means something.
+    """
+    if len(nodes) < 2:
+        return nodes
+    kept: list[Node] = []
+    for n in nodes:
+        # An ancestor of another candidate is redundant.
+        if any(m is not n and _contains(n, m) for m in nodes):
+            continue
+        kept.append(n)
+    if len(kept) < 2:
+        return kept or nodes
+
+    # Wrappers that share a box exactly: keep the deepest, then the one whose
+    # accessible name is shortest (an ancestor's name is its children's,
+    # concatenated).
+    out: list[Node] = []
+    for n in kept:
+        twin = next(
+            (
+                m
+                for m in out
+                if m.frame_path == n.frame_path
+                and m.bbox
+                and n.bbox
+                and all(abs(a - b) <= CONTAINMENT_SLACK for a, b in zip(m.bbox, n.bbox))
+            ),
+            None,
+        )
+        if twin is None:
+            out.append(n)
+            continue
+        better = (_depth(n), -len(n.name or "")) > (_depth(twin), -len(twin.name or ""))
+        if better:
+            out[out.index(twin)] = n
+    return out
+
+
 def _unique(matches: list[Node], what: str, nth: int = 0) -> _TierResult:
     """Shared unique-or-ambiguous verdict. ``nth`` > 0 is an explicit,
     recorded ordinal selection and is therefore allowed to index."""
     if not matches:
         return _TierResult(None, 0, f"no node matched {what}")
+    if not nth:
+        matches = _collapse_nested(matches)
     if nth:
         if nth < len(matches):
             return _TierResult(matches[nth], len(matches), f"{what} [nth={nth}]")
@@ -456,13 +551,13 @@ def _relation_candidates(
                 continue
             tb = n.bbox
             if s.relation is Relation.SAME_ROW:
-                if _same_row(ab, tb) and tb[0] >= ab[0] + ab[2] + RIGHT_GAP_PX:
+                if _same_row(ab, tb) and tb[0] >= ab[0] + ab[2] - _row_slack(ab, tb):
                     scored.append((tb[0] - (ab[0] + ab[2]), n))
             elif s.relation is Relation.RIGHT_OF:
-                if _v_overlap(ab, tb) and tb[0] >= ab[0] + ab[2] + RIGHT_GAP_PX:
+                if _v_overlap(ab, tb) and tb[0] >= ab[0] + ab[2] - _row_slack(ab, tb):
                     scored.append((tb[0] - (ab[0] + ab[2]), n))
             elif s.relation is Relation.BELOW:
-                if _h_overlap(ab, tb) and tb[1] >= ab[1] + ab[3] + BELOW_GAP_PX:
+                if _h_overlap(ab, tb) and tb[1] >= ab[1] + ab[3] - _row_slack(ab, tb):
                     scored.append((tb[1] - (ab[1] + ab[3]), n))
             elif s.relation is Relation.WITHIN:
                 if _contained(ab, tb, WITHIN_PAD_PX):
@@ -500,6 +595,9 @@ def _anchor(s: AnchorRelativeLocator, obs: Observation) -> _TierResult:
     for anchor in anchors:
         scored, mode = _relation_candidates(anchor, s, obs)
         total += len(scored)
+        if s.nth == 0 and len(scored) > 1:
+            keep = {id(n) for n in _collapse_nested([n for _, n in scored])}
+            scored = [(d, n) for d, n in scored if id(n) in keep]
         if len(scored) <= s.nth:
             continue
         # nearest-wins, but a genuine tie is ambiguity, not a coin flip.
