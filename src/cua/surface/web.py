@@ -257,6 +257,40 @@ class WebSurface:
 
     # --------------------------------------------------------------- observe
 
+    def _settle_frames(self, timeout_ms: int = 6000) -> None:
+        """Wait for the frame tree to stop changing before snapshotting.
+
+        A frameset's children are still empty for a beat after the parent
+        navigates, so snapshotting immediately yields an EMPTY observation --
+        which is precisely what happens on our target app's post-login screen.
+
+        This is a bounded wait on an explicit condition (every frame has a URL
+        and the set of frames has stopped changing), not a blind sleep. The
+        determinism rule forbids sleeping a fixed interval and hoping; it does
+        not forbid waiting for a stated condition with a deadline.
+        """
+        page = self.page
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        last: tuple[str, ...] | None = None
+        stable = 0
+        while time.monotonic() < deadline:
+            try:
+                frames = tuple(sorted(f.url for f in page.frames))
+                ready = all(f.url for f in page.frames)
+            except Exception:  # noqa: BLE001 - page may be navigating
+                return
+            if ready and frames == last:
+                stable += 1
+                if stable >= 2:
+                    return
+            else:
+                stable = 0
+                last = frames
+            try:
+                page.wait_for_timeout(50)
+            except Exception:  # noqa: BLE001
+                return
+
     def observe(self) -> Observation:
         """Build an `Observation` from the accessibility tree of every frame.
 
@@ -290,6 +324,7 @@ class WebSurface:
         ``ge=0.0, le=1.0`` constraints.  Boxes are clamped rather than dropped:
         a partially off-screen control is still a real control.
         """
+        self._settle_frames()
         vw, vh = self._viewport()
         nodes: list[Node] = []
         self._ref_index = {}
