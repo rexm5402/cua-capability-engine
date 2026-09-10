@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import os
 
-from cua.artifact import ActionType, LocatorBundle, SemanticLocator
+from cua.artifact import ActionType, LocatorBundle, RiskClass, SemanticLocator
+from cua.policy.gate import Allow, PolicyGate
 from cua.surface.base import Action, Surface
 
 
 class AuthError(RuntimeError):
     pass
+
+
+class AuthPolicyDenied(AuthError):
+    """The allowlist refused an authentication action."""
 
 
 def _field(role: str, name: str) -> LocatorBundle:
@@ -32,6 +37,7 @@ def _field(role: str, name: str) -> LocatorBundle:
 def authenticate(
     surface: Surface,
     *,
+    gate: PolicyGate | None = None,
     user_field: str = "Operator ID",
     pass_field: str = "Password",
     submit: str = "Sign On",
@@ -46,6 +52,29 @@ def authenticate(
     usable both up front and as the `reauth` recovery handler when a
     session-expiry signal fires mid-replay.
     """
+    def _act(action: Action, what: str) -> None:
+        """Every authentication action goes through the SAME chokepoint as
+        every other action.
+
+        This path used to call `surface.act` directly, which made the
+        "one gate, no exceptions" claim false: authentication runs before a
+        capability AND as the `reauth` recovery handler mid-replay, so an
+        un-gated login was reachable at runtime, on the live session, against
+        whatever origin the surface happened to be pointed at.
+        """
+        if gate is not None:
+            decision = gate.check(
+                action, current_url=surface.observe().url, risk=RiskClass.REVERSIBLE
+            )
+            if not isinstance(decision, Allow):
+                raise AuthPolicyDenied(
+                    f"policy refused {what}: "
+                    f"{getattr(decision, 'reason', decision)}"
+                )
+        res = surface.act(action)
+        if not res.ok:
+            raise AuthError(f"could not {what}: {res.detail}")
+
     obs = surface.observe()
     if ready_text.casefold() in (obs.text_digest or "").casefold():
         return True
@@ -60,21 +89,21 @@ def authenticate(
 
     for bundle, value in ((_field("textbox", user_field), user),
                           (_field("textbox", pass_field), secret)):
-        res = surface.act(Action(type=ActionType.TYPE, target=bundle, value=value))
-        if not res.ok:
-            raise AuthError(f"could not fill {bundle.description}: {res.detail}")
+        _act(
+            Action(type=ActionType.TYPE, target=bundle, value=value),
+            f"fill {bundle.description}",
+        )
 
-    res = surface.act(
+    _act(
         Action(
             type=ActionType.CLICK,
             target=LocatorBundle(
                 description=f"the {submit} button",
                 strategies=[SemanticLocator(role="button", name=submit)],
             ),
-        )
+        ),
+        "submit the login form",
     )
-    if not res.ok:
-        raise AuthError(f"could not submit the login form: {res.detail}")
 
     after = surface.observe()
     ok = ready_text.casefold() in (after.text_digest or "").casefold()

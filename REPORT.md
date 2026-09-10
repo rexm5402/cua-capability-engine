@@ -241,7 +241,11 @@ which is why it, not the console, is the contribution.
 ## 6. Safety
 
 Every action passes `PolicyGate.check`. One chokepoint, so allowlist enforcement
-is architectural rather than a matter of remembering.
+is architectural rather than a matter of remembering -- **including
+authentication**, which is easy to overlook precisely because it runs outside a
+capability. It executes before a flow and again as the `reauth` recovery
+handler, so an un-gated login would be reachable at runtime, on the live
+session, against whatever origin the surface happened to be showing.
 
 - **Deny by default.** A gate with no policy denies everything; that is tested.
   Order is action type -> URL -> risk, so an irreversible action on a

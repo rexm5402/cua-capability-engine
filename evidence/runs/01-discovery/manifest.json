@@ -1,9 +1,9 @@
 {
-  "run_id": "discovery-20260910T225700Z",
+  "run_id": "discovery-20260910T232455Z",
   "kind": "discovery",
   "capability_id": null,
-  "started_at": "2026-09-10T22:57:00.074+00:00",
-  "ended_at": "2026-09-10T22:58:58.270+00:00",
+  "started_at": "2026-09-10T23:24:55.286+00:00",
+  "ended_at": "2026-09-10T23:26:54.296+00:00",
   "steps": 3,
   "final_outcome": null,
   "attachments": [],
@@ -12,7 +12,7 @@
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
     "hostname": "Mac",
-    "pid": 34395
+    "pid": 36235
   },
   "redaction": {
     "enabled": false,

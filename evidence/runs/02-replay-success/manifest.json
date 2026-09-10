@@ -1,19 +1,19 @@
 {
-  "run_id": "replay-20260910T230229Z",
+  "run_id": "replay-20260910T233247Z",
   "kind": "replay",
-  "capability_id": "cap-discovery-7c73a918bd18",
-  "started_at": "2026-09-10T23:02:29.195+00:00",
-  "ended_at": "2026-09-10T23:04:42.828+00:00",
+  "capability_id": "cap-discovery-5ebe616f974e",
+  "started_at": "2026-09-10T23:32:47.500+00:00",
+  "ended_at": "2026-09-10T23:35:01.537+00:00",
   "steps": 3,
   "final_outcome": {
     "kind": "success",
-    "capability_id": "cap-discovery-7c73a918bd18",
+    "capability_id": "cap-discovery-5ebe616f974e",
     "outputs": {
       "savings_balance": "$ 217.03"
     },
     "steps_executed": 3,
     "tier_escalations": 1,
-    "evidence_dir": "evidence/runs/replay-20260910T230229Z"
+    "evidence_dir": "evidence/runs/replay-20260910T233247Z"
   },
   "attachments": [],
   "environment": {
@@ -21,7 +21,7 @@
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
     "hostname": "Mac",
-    "pid": 34468
+    "pid": 36366
   },
   "redaction": {
     "enabled": true,

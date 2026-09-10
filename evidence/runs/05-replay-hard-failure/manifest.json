@@ -1,32 +1,32 @@
 {
-  "run_id": "replay-20260910T231038Z",
+  "run_id": "replay-20260910T233839Z",
   "kind": "replay",
-  "capability_id": "cap-discovery-7c73a918bd18",
-  "started_at": "2026-09-10T23:10:38.614+00:00",
-  "ended_at": "2026-09-10T23:10:50.297+00:00",
+  "capability_id": "cap-discovery-5ebe616f974e",
+  "started_at": "2026-09-10T23:38:39.977+00:00",
+  "ended_at": "2026-09-10T23:38:52.087+00:00",
   "steps": 1,
   "final_outcome": {
     "kind": "failure",
-    "capability_id": "cap-discovery-7c73a918bd18",
+    "capability_id": "cap-discovery-5ebe616f974e",
     "code": "application_error",
     "at_step_id": "s1",
-    "step_intent": "Enter the provided member ID into the Member ID field as required.",
-    "expected": "Enter the provided member ID into the Member ID field as required.",
+    "step_intent": "Enter the provided member ID into the Member ID field",
+    "expected": "Enter the provided member ID into the Member ID field",
     "observed": "The application returned an error page. (text_present='Unhandled exception')",
     "resolved_tier": null,
     "candidates": 0,
-    "evidence_dir": "evidence/runs/replay-20260910T231038Z",
+    "evidence_dir": "evidence/runs/replay-20260910T233839Z",
     "escalated": false
   },
   "attachments": [
-    "screenshots/20260910T231050-failure-application_error-s1.png"
+    "screenshots/20260910T233852-failure-application_error-s1.png"
   ],
   "environment": {
     "python": "3.13.3",
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
     "hostname": "Mac",
-    "pid": 34956
+    "pid": 36449
   },
   "redaction": {
     "enabled": true,

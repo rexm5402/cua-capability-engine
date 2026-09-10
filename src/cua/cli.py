@@ -128,7 +128,7 @@ def cmd_discover(a: argparse.Namespace) -> int:
             if not a.no_auth:
                 # Authenticate FIRST so the recorded flow begins post-login and
                 # no credential can reach the artifact.
-                authenticate(s)
+                authenticate(s, gate=gate)
             traj = discover(
                 a.goal, a.url, s, llm=llm, inputs=inputs, gate=gate,
                 recorder=rec, max_steps=a.max_steps,
@@ -161,7 +161,7 @@ def cmd_discover(a: argparse.Namespace) -> int:
             _surface(a.url, headless=True, app_id=a.app_id, tenant=a.tenant)
         )
         if cap.auth.required and not a.no_auth:
-            authenticate(s)
+            authenticate(s, gate=_gate(a.policy))
         return s
 
     def _report(r):
@@ -206,7 +206,7 @@ def cmd_replay(a: argparse.Namespace) -> int:
         with _surface(url, headless=a.headless, app_id=cap.app_profile.app_id,
                       tenant=a.tenant) as s:
             if cap.auth.required and not a.no_auth:
-                authenticate(s)
+                authenticate(s, gate=_gate(a.policy))
             if a.inject:
                 # Arm the fault AFTER authenticating. The fixture's universal
                 # modes fire on the next request, so arming it on the entry URL

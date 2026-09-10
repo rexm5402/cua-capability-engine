@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
+from cua.discovery.scrub import scrub_capability
 from cua.artifact import (
     ActionType,
     AppProfileRef,
@@ -363,7 +364,7 @@ def compile_trajectory(
     declared_inputs: list[ParamSpec] = [p for p in traj.params if p.name in used_params]
 
     cap_id = capability_id or f"cap-{traj.run_id}"
-    return Capability(
+    cap = Capability(
         id=cap_id,
         name=name or re.sub(r"[^a-z0-9]+", "_", goal.casefold()).strip("_")[:60] or cap_id,
         version=version,
@@ -383,3 +384,5 @@ def compile_trajectory(
             recorded_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         ),
     )
+    # C1: no value the schema tags pii/secret may survive into the artifact.
+    return scrub_capability(cap, inputs)

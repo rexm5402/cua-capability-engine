@@ -9,10 +9,10 @@ auth:
   provider: session_provider
   required: true
   scope: null
-description: look up member 10001 and read their current savings balance. Type the member id into the
-  Member ID field FIRST, then press Retrieve once.
+description: look up member <param:member_id> and read their current savings balance. Type the member
+  id into the Member ID field FIRST, then press Retrieve once.
 entry_url: http://localhost:5055/search
-id: cap-discovery-7c73a918bd18
+id: cap-discovery-5ebe616f974e
 inputs:
 - description: Input 'member_id', supplied by the calling agent.
   example: null
@@ -23,7 +23,7 @@ inputs:
   type: string
 name: lookup_member_balance
 outputs:
-- description: Read the member's current savings balance from the detail page
+- description: Read the member's current savings balance displayed on the Member Detail page
   item_type: null
   name: savings_balance
   sensitivity: public
@@ -41,11 +41,11 @@ possible_outcomes:
   description: The submitted form was rejected by a field-level validation rule.
   partial_outputs: []
 provenance:
-  discovery_run_id: discovery-7c73a918bd18
-  recorded_at: '2026-09-10T22:58:58+00:00'
+  discovery_run_id: discovery-5ebe616f974e
+  recorded_at: '2026-09-10T23:26:54+00:00'
   recorded_by_model: gpt-oss:120b-cloud
   verification_mode: full_replay
-  verified_at: '2026-09-10T23:02:24+00:00'
+  verified_at: '2026-09-10T23:30:21+00:00'
   verified_with_inputs: {}
 risk_class: read_only
 schema_version: '1.0'
@@ -96,14 +96,14 @@ steps:
 - action: type
   baseline_tier: 1
   id: s1
-  intent: Enter the provided member ID into the Member ID field as required.
+  intent: Enter the provided member ID into the Member ID field
   output_name: null
   post_condition:
-    description: 'step s1: the "Search Criteria Member ID 10001 Branch Code Include Closed Accounts Retrieve"
-      LayoutTableCell is present'
+    description: 'step s1: the "Search Criteria Member ID <param:member_id> Branch Code Include Closed
+      Accounts Retrieve" LayoutTableCell is present'
     locator:
-      description: the "Search Criteria Member ID 10001 Branch Code Include Closed Accounts Retrieve"
-        LayoutTableCell
+      description: the "Search Criteria Member ID <param:member_id> Branch Code Include Closed Accounts
+        Retrieve" LayoutTableCell
       scope_text: null
       strategies:
       - dom_path: html/body/table/tbody/tr/td/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr/td
@@ -147,7 +147,7 @@ steps:
 - action: click
   baseline_tier: 1
   id: s2
-  intent: Submit the member ID to retrieve member details
+  intent: Submit the Member ID to retrieve member details
   output_name: null
   post_condition:
     description: 'step s2: landed on http://localhost:5055/member/:member_id'
@@ -187,7 +187,7 @@ steps:
 - action: read
   baseline_tier: 1
   id: s3
-  intent: Read the member's current savings balance from the detail page
+  intent: Read the member's current savings balance displayed on the Member Detail page
   output_name: savings_balance
   post_condition: null
   retries: 0
