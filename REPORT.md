@@ -78,6 +78,20 @@ refinements make this a real proof rather than a nice story:
 
 `provenance.verification_mode` records which proof an artifact carries.
 
+This is not theoretical. During the reference run the model found a flow that
+began by pressing Retrieve on an empty form -- which renders "No records
+located." before the real search. On verification, replay correctly classified
+that page as `record_not_found` and stopped, so **the artifact was never
+written**. Verify-before-save caught a flow that worked for the model and would
+have misreported in production.
+
+This is not theoretical. During the reference run the model found a flow that
+began by pressing Retrieve on an empty form -- which renders "No records
+located." before the real search. On verification, replay correctly classified
+that page as `record_not_found` and stopped, so **the artifact was never
+written**. Verify-before-save caught a flow that worked for the model and would
+have misreported in production.
+
 Telemetry deliberately does **not** live on the artifact: it mutates every
 replay and would churn the hash of a supposedly immutable, reviewable document
 without its behaviour changing.
@@ -96,7 +110,13 @@ Replay returns a discriminated union of three types:
 Recoverable conditions never reach the caller: known interstitials are
 dismissed, transient loads waited out, expired sessions re-authenticated, each
 under an attempt budget so a condition that never clears becomes a hard failure
-rather than an infinite loop.
+rather than an infinite loop. Whether the original action is re-performed after
+a dismissal depends on whether it landed: an action that succeeded before the
+interstitial appeared must not be repeated, while one that failed *because* the
+interstitial covered the control has not happened yet and is retried. Whether the original action is re-performed after
+a dismissal depends on whether it landed: an action that succeeded before the
+interstitial appeared must not be repeated, while one that failed *because* the
+interstitial covered the control has not happened yet and is retried.
 
 The glossary names conflating a business outcome with a failure as the most
 common design mistake here. Three distinct types make it structurally impossible
@@ -139,6 +159,34 @@ different DOM paths — and it still lands on the right control.
 At record time every synthesized strategy is validated by resolving it against
 its own observation; ambiguous ones are dropped. We only record locators proven
 unique.
+
+Two bugs here were found only by running against a real page, and both shape the
+design. First, row tolerances were absolute pixel constants while the surface
+reports normalized `[0,1]` geometry -- a tolerance of six full viewports, under
+which every node shared a row with every other and the direction test was
+vacuous. All 35 synthetic locator tests passed through it, because their
+fixtures used pixel-like numbers. Tolerances are now derived from the boxes
+themselves and are unit-free. Second, `_same_row` used `max(heights)`, letting a
+tall ancestor widen its own band until it captured rows far away; in a
+table-soup accessibility tree those ancestors are everywhere, and they inherit
+their children's concatenated accessible name and bounding box. Matching now
+requires mutual centre containment, and containment chains collapse to the
+innermost node before ambiguity is judged -- an ancestor and its descendant are
+one visual control at two depths, not two matches.
+
+Two bugs here were found only by running against a real page, and both are worth
+stating because they shape the design. First, row tolerances were absolute pixel
+constants while the surface reports normalized `[0,1]` geometry -- a tolerance of
+six full viewports, under which every node shared a row with every other and the
+direction test was vacuous. All 35 synthetic locator tests passed through it,
+because their fixtures used pixel-like numbers. Tolerances are now derived from
+the boxes themselves and are unit-free. Second, `_same_row` used `max(heights)`,
+letting a tall ancestor widen its own band until it captured rows far away; in a
+table-soup accessibility tree those ancestors are everywhere, and they inherit
+their children's concatenated accessible name and bounding box. Matching now
+requires mutual centre containment, and containment chains collapse to the
+innermost node before ambiguity is judged -- an ancestor and its descendant are
+one visual control at two depths, not two matches.
 
 ## 4. Heterogeneity & multi-tenant
 
@@ -219,7 +267,11 @@ proxy for what an action *does*: risk is a label applied at discovery time, and
 a step mislabelled `reversible` that actually submits a payment is allowed.
 Redaction is best-effort in both directions — it will miss a name, an address,
 or a reformatted identifier, and over-redact legitimate long numbers; screenshot
-masking only covers regions someone thought to declare. Finally, a compromised
+masking only covers regions someone thought to declare. The over-redaction risk
+is real and we hit it: a 13-digit epoch-millisecond screenshot filename was
+scrubbed as a card number, corrupting the evidence reference it was meant to
+protect. Filenames now carry a UTC timestamp, but the general hazard -- a
+heuristic that cannot tell an account number from a claim id -- remains. Finally, a compromised
 application page could prompt-inject the discovery agent — which is exactly why
 the production path contains no model at all.
 
@@ -237,6 +289,40 @@ the production path contains no model at all.
 - *LLM-assisted recovery on replay failure.* Tempting, and deliberately omitted:
   a bounded single-step recovery reintroduces a model into the production path,
   and its policy story deserves more care than time allowed.
+
+**Known gaps, disclosed rather than hidden:**
+
+- *`ValueRef` cannot express a templated URL.* A `NAVIGATE` step whose URL
+  embeds an input can only compile as a literal, since `ValueRef` is
+  literal-or-param with no interpolation. It fails closed -- verification
+  rejects such an artifact -- but the fix is a schema change (`ValueRef` needs a
+  `template` form). The reference flow uses the search form, so this is latent.
+- *Canonical route patterns have nowhere to live on `Capability`.* They end up
+  inside `Checkpoint.url_matches` regexes rather than in a field a reviewer
+  would look for.
+- *The cross-tenant claim is designed and fixtured but not demonstrated.* Tenant
+  B exists in the fixture app with reordered fields and different wording; no
+  artifact has been run against it with an overlay.
+- *Discovery is prompt-sensitive.* The model sometimes records a redundant first
+  action. Verification catches the consequences, but the artifact quality varies
+  run to run in a way a production system would want to normalize.
+
+**Known gaps, disclosed rather than hidden:**
+
+- *`ValueRef` cannot express a templated URL.* A `NAVIGATE` step whose URL
+  embeds an input can only compile as a literal, since `ValueRef` is
+  literal-or-param with no interpolation. It fails closed -- verification
+  rejects such an artifact -- but the fix is a schema change (`ValueRef` needs a
+  `template` form). The reference flow uses the search form, so this is latent.
+- *Canonical route patterns have nowhere to live on `Capability`.* They end up
+  inside `Checkpoint.url_matches` regexes rather than in a field a reviewer
+  would look for.
+- *The cross-tenant claim is designed and fixtured but not demonstrated.*
+  Tenant B exists in the fixture app with reordered fields and different
+  wording; no artifact has been run against it with an overlay.
+- *Discovery is prompt-sensitive.* The model sometimes records a redundant first
+  action; verification catches the consequences, but artifact quality varies run
+  to run in a way a production system would want to normalize.
 
 **Next, in order:** the tenant-B overlay applied end to end; the capability
 catalog exposed as a callable tool surface; multi-run stability scoring gating

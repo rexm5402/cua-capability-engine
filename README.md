@@ -25,12 +25,31 @@ playwright install chromium        # only needed for live runs
 
 ### Configuration
 
-Only the discovery run needs a model. Replay never calls one.
+Only the discovery run needs a model. **Replay never calls one**, so no key, no
+quota and no network are required on the production path.
+
+The reference run used a **free** model through Ollama:
 
 ```bash
-export XAI_API_KEY=...             # provider-agnostic; see src/cua/llm/client.py
-export CUA_LLM_PROVIDER=xai        # xai (default) | openai
-export CUA_LLM_MODEL=grok-4
+ollama serve                                   # already running for most installs
+export CUA_LLM_PROVIDER=ollama
+export CUA_LLM_MODEL=gpt-oss:120b-cloud        # or a local model, e.g. qwen3:8b
+```
+
+Any OpenAI-compatible provider works without code changes -- the discovery agent
+does not know which model it is talking to:
+
+```bash
+export CUA_LLM_PROVIDER=xai      CUA_LLM_MODEL=grok-4        XAI_API_KEY=...
+export CUA_LLM_PROVIDER=nvidia   CUA_LLM_MODEL=...           NVIDIA_API_KEY=...
+export CUA_LLM_PROVIDER=openai   CUA_LLM_MODEL=gpt-4o        OPENAI_API_KEY=...
+```
+
+Fixture credentials for the demo app (supplied at run time, **never recorded
+into an artifact** -- see `src/cua/session/provider.py`):
+
+```bash
+export CUA_APP_USER=demo CUA_APP_PASS=demo
 ```
 
 No key is needed to run the test suite, the fixture app, or a replay against a
@@ -52,20 +71,34 @@ python -m fixtures.legacy_bank.app          # http://localhost:5055
 python -m cua discover \
   --goal "look up member 10001 and read their current savings balance" \
   --url http://localhost:5055/search \
+  --input member_id=10001 --verify-input member_id=10002 \
+  --profile profiles/coreteller.yaml --name lookup_member_balance \
   --out artifacts/lookup_member_balance.yaml
 ```
+
+`--profile` supplies signals, outcomes and product identity, which belong to the
+**vendor product** rather than to any one flow (`profiles/coreteller.yaml`).
+`--verify-input` is a second *real* input used for verification -- see below.
 
 The agent observes the accessibility tree, decides, and acts. On success it
 compiles the trajectory into an artifact, then **immediately replays that
 artifact with the LLM switched off and a different member id**. If the
-verification replay fails, the artifact is not written. A saved artifact is
-therefore a flow already proven to run without a model.
+verification replay fails, the artifact is not written -- a saved artifact is a
+flow already proven to run without a model.
+
+The different input is the point: replaying with the *same* value would pass
+even if the compiler had baked a literal where a parameter belongs. A derived
+value can match the shape of a real one but cannot know which values exist in
+the target system, so the operator supplies it with `--verify-input`.
 
 **3. Replay — the production path an AI agent triggers.**
 
 ```bash
 python -m cua replay artifacts/lookup_member_balance.yaml --input member_id=10002
 ```
+
+Returns `Success` with `{"savings_balance": "$ 217.03"}` -- a different member
+than discovery used.
 
 **4. Replay against an exceptional state.** The fixture app can be told to
 misbehave on demand:
