@@ -1,7 +1,7 @@
 """Surface tests.
 
-Everything here is hermetic: no browser, no network, no API key.  The one test
-that needs a real Chromium is guarded by `requires_browser` and skips cleanly
+Everything here is hermetic: no browser, no network, no API key.  The tests
+that need a real Chromium are guarded by `requires_browser` and skip cleanly
 when Playwright (or its browser binary) is absent.
 """
 
@@ -550,3 +550,115 @@ def test_web_observe_traverses_frames(tmp_path):
         assert n.frame_path == ("detailFrame",)
         assert n.bbox is not None and all(0.0 <= v <= 1.0 for v in n.bbox)
         assert s.snapshot("frames") is not None
+
+
+@requires_browser
+@requires_resolver
+def test_web_observe_sees_table_label_and_input_and_bundle_round_trips(tmp_path):
+    """The real target shape: a nested table where the only thing identifying a
+    field is the printed label in the cell to its left.
+
+    This is the end-to-end proof of the tier-2 story -- the label must survive
+    perception as its OWN node, with geometry, so `build_bundle` can infer an
+    anchor-relative locator that resolves back to the field.
+    """
+    from cua.artifact import AnchorRelativeLocator, LocatorBundle
+    from cua.locator.record import build_bundle
+    from cua.locator.resolve import resolve
+
+    page = tmp_path / "member.html"
+    page.write_text(
+        "<html><body><table><tr><td>"
+        "<table>"
+        '<tr><td>Member ID</td><td><input name="f_7"></td></tr>'
+        "</table>"
+        "</td></tr></table></body></html>",
+        encoding="utf-8",
+    )
+
+    cfg = WebSurfaceConfig(headless=True, evidence_dir=str(tmp_path / "evidence"))
+    with WebSurface.launch("legacy", start_url=page.as_uri(), config=cfg) as s:
+        obs = s.observe()
+
+        labels = [n for n in obs.nodes if "Member ID" in (n.name or "")]
+        assert labels, obs.render()
+        assert any(n.bbox is not None for n in labels), obs.render()
+
+        boxes = [n for n in obs.nodes if n.role == "textbox"]
+        assert len(boxes) == 1, obs.render()
+        field = boxes[0]
+        assert field.bbox is not None and all(0.0 <= v <= 1.0 for v in field.bbox)
+        assert field.dom_path and "input" in field.dom_path
+
+        bundle = build_bundle(field, obs)
+        anchored = [
+            st for st in bundle.strategies if isinstance(st, AnchorRelativeLocator)
+        ]
+        assert anchored, f"no anchor-relative tier recorded: {bundle.strategies}"
+
+        for st in anchored:
+            probe = LocatorBundle(
+                description="anchor probe",
+                strategies=[st],
+                scope_text=bundle.scope_text,
+            )
+            r = resolve(probe, obs)
+            assert r.node is not None and r.node.ref == field.ref, r.reason
+
+
+@requires_browser
+def test_web_observe_traverses_a_frameset(tmp_path):
+    """Framesets, not just iframes: child-frame nodes must carry the frame's
+    declared name in `frame_path`, because replay re-enters by that path."""
+    nav = tmp_path / "nav.html"
+    nav.write_text("<html><body><a href='#'>Help Desk</a></body></html>", encoding="utf-8")
+    main = tmp_path / "main.html"
+    main.write_text(
+        "<html><body><button>Post Batch</button>"
+        "<p>Ledger closed for period</p></body></html>",
+        encoding="utf-8",
+    )
+    fs = tmp_path / "frameset.html"
+    fs.write_text(
+        "<html><frameset cols='20%,80%'>"
+        f'<frame name="navFrame" src="{nav.as_uri()}">'
+        f'<frame name="mainFrame" src="{main.as_uri()}">'
+        "</frameset></html>",
+        encoding="utf-8",
+    )
+
+    cfg = WebSurfaceConfig(headless=True, evidence_dir=str(tmp_path / "evidence"))
+    with WebSurface.launch("legacy", start_url=fs.as_uri(), config=cfg) as s:
+        obs = s.observe()
+
+        post = [n for n in obs.nodes if n.name == "Post Batch"]
+        assert post, obs.render()
+        assert post[0].frame_path == ("mainFrame",), post[0].frame_path
+
+        helpdesk = [n for n in obs.nodes if n.name == "Help Desk"]
+        assert helpdesk, obs.render()
+        assert helpdesk[0].frame_path == ("navFrame",), helpdesk[0].frame_path
+
+        # ...and text inside a child frame reaches `text_present` checkpoints.
+        assert "Ledger closed for period" in obs.text_digest
+        assert s.wait_for(
+            Checkpoint(description="posted", text_present="Ledger closed for period"), 2000
+        )
+
+
+@requires_browser
+def test_web_text_digest_spans_iframes(tmp_path):
+    inner = tmp_path / "inner.html"
+    inner.write_text("<html><body><p>Deep Inside Text</p></body></html>", encoding="utf-8")
+    outer = tmp_path / "outer.html"
+    outer.write_text(
+        f"<html><body><p>Surface Text</p>"
+        f'<iframe name="detailFrame" src="{inner.as_uri()}"></iframe></body></html>',
+        encoding="utf-8",
+    )
+
+    cfg = WebSurfaceConfig(headless=True, evidence_dir=str(tmp_path / "evidence"))
+    with WebSurface.launch("test-app", start_url=outer.as_uri(), config=cfg) as s:
+        obs = s.observe()
+        assert "Surface Text" in obs.text_digest
+        assert "Deep Inside Text" in obs.text_digest

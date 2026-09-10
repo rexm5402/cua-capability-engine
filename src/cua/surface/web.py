@@ -3,17 +3,19 @@
 Design commitments, in order of importance:
 
 1.  **The accessibility tree is the source of truth, not CSS.**  Every node in an
-    `Observation` comes from Playwright's `page.accessibility.snapshot()`, which
-    is the same representation a screen reader (and a desktop automation API)
-    sees.  CSS selectors appear only as a *recorded, distrusted* `dom_path`
+    `Observation` comes from the accessibility tree -- read over CDP
+    (`Accessibility.getFullAXTree`, per frame), because Playwright 1.62 removed
+    the `page.accessibility` / `frame.accessibility` API entirely.  That tree is
+    the same representation a screen reader (and a desktop automation API) sees.  CSS selectors appear only as a *recorded, distrusted* `dom_path`
     (LocatorTier.STRUCTURAL).  This is what makes the surface seam portable to a
     native desktop app later.
 
 2.  **Frames are traversed, not ignored.**  The target class of app is a hostile
     legacy surface: framesets, nested tables, no test ids.  A snapshot of the
-    main frame alone would see nothing.  We walk `page.main_frame` and every
-    descendant frame, recursively, and stamp every node with the `frame_path`
-    that reached it.
+    main frame alone would see nothing -- and `Accessibility.getFullAXTree`
+    with no `frameId` returns exactly that.  We walk `Page.getFrameTree`
+    recursively, ask for the AX tree of EVERY frame id, and stamp every node
+    with the `frame_path` that reached it.
 
 3.  **Never guess.**  When an action is addressed by `LocatorBundle`, we
     re-observe and delegate to `cua.locator.resolve.resolve`.  Ambiguity or
@@ -73,6 +75,77 @@ _VALUE_ROLES = frozenset(
     {"textbox", "combobox", "searchbox", "spinbutton", "slider", "checkbox", "radio"}
 )
 
+#: AX roles that carry printed text rather than a control.  We keep them as
+#: nodes -- the anchor-relative tier is the workhorse on table-based legacy
+#: screens and it needs the printed label to EXIST as a node -- but we skip the
+#: DOM round trip that only pays off for something you can click or type into.
+_TEXTUAL_ROLES = frozenset(
+    {
+        "StaticText",
+        "text",
+        "paragraph",
+        "caption",
+        "legend",
+        "cell",
+        "gridcell",
+        "columnheader",
+        "rowheader",
+        "row",
+        "table",
+        "rowgroup",
+        "listitem",
+        "list",
+        "heading",
+        "label",
+    }
+)
+
+_MARK_ATTR = "data-cua-ref"
+
+_MARK_JS = """function(marker){
+    const el = this.nodeType === 1 ? this : this.parentElement;
+    if (!el) return false;
+    el.setAttribute('%s', marker);
+    return true;
+}""" % _MARK_ATTR
+
+_ELEMENT_INFO_JS = """function(){
+    const el = this.nodeType === 1 ? this : this.parentElement;
+    if (!el) return null;
+    const p = []; let n = el;
+    while (n && n.nodeType === 1 && p.length < 25) {
+      let s = n.nodeName.toLowerCase();
+      const par = n.parentNode;
+      if (par && par.children) {
+        const sibs = [...par.children].filter(c => c.nodeName === n.nodeName);
+        if (sibs.length > 1) s += '[' + (sibs.indexOf(n) + 1) + ']';
+      }
+      p.unshift(s); n = par;
+    }
+    let near = '', m = el;
+    for (let i = 0; i < 4 && m; i++) {
+      m = m.parentElement;
+      if (!m) break;
+      const t = (m.innerText || '').trim();
+      if (t && t.length < 200) { near = t.slice(0, 200); break; }
+    }
+    let val = null;
+    try { if (typeof el.value === 'string') val = el.value; } catch (e) {}
+    return {dom_path: p.join('/'), near: near, value: val};
+}"""
+
+
+@dataclass(frozen=True)
+class _HandleSpec:
+    """Everything needed to (lazily) re-acquire a unique live handle."""
+
+    ref: str
+    frame: Any
+    role: str
+    name: str
+    backend_id: int | None
+
+
 _WS = re.compile(r"\s+")
 
 
@@ -112,7 +185,8 @@ class WebSurface:
         self.config = config or WebSurfaceConfig()
         self._owned = _owned
         self._last_obs: Observation | None = None
-        self._ref_index: dict[str, tuple[Node, Any]] = {}
+        self._ref_index: dict[str, tuple[Node, "_HandleSpec"]] = {}
+        self._cdp_session: Any = None
         self._tracing = False
         Path(self.config.evidence_dir).mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(Exception):
@@ -173,6 +247,7 @@ class WebSurface:
                 pw.stop()
 
     def close(self) -> None:
+        self._cdp_session = None
         for obj in reversed(self._owned):
             with contextlib.suppress(Exception):
                 if hasattr(obj, "close"):
@@ -187,9 +262,9 @@ class WebSurface:
 
         Frame traversal
         ---------------
-        We start at ``page.main_frame`` with ``frame_path = ()`` and recurse
-        through ``frame.child_frames``.  Each child contributes one segment to
-        the path, chosen in this order of preference:
+        We start at the root of ``Page.getFrameTree`` with ``frame_path = ()``
+        and recurse through ``childFrames``.  Each child contributes one segment
+        to the path, chosen in this order of preference:
 
           1. the frame's ``name`` attribute (legacy framesets almost always name
              their frames -- ``navFrame``, ``mainFrame``);
@@ -205,13 +280,11 @@ class WebSurface:
 
         bbox normalization
         ------------------
-        Playwright reports element boxes in **page CSS pixels relative to the
-        top-level viewport** (frame offsets already applied), so a node inside an
-        iframe needs no manual offset arithmetic.  We divide by the *viewport*
-        size, not the document scroll size, and add the current scroll offset so
-        coordinates describe the document position:
+        ``DOM.getBoxModel`` reports boxes in **root-frame viewport CSS pixels**
+        (frame offsets already applied), so a node inside an iframe needs no
+        manual offset arithmetic.  We divide by the *viewport* size:
 
-            x = (box.x + scroll_x) / viewport_w  ... clamped into [0, 1]
+            x = box.x / viewport_w  ... clamped into [0, 1]
 
         The result is resolution-independent and matches ``GeometryLocator``'s
         ``ge=0.0, le=1.0`` constraints.  Boxes are clamped rather than dropped:
@@ -222,7 +295,15 @@ class WebSurface:
         self._ref_index = {}
         counter = [0]
 
-        self._walk_frame(self.page.main_frame, (), nodes, counter, vw, vh)
+        cdp = self._cdp()
+        if cdp is not None:
+            # Populate the DOM agent's node map so `backendNodeId` lookups
+            # (box model, resolveNode) work for every frame, iframes included.
+            self._safe(lambda: cdp.send("DOM.getDocument", {"depth": -1, "pierce": True}), None)
+            tree = self._safe(lambda: cdp.send("Page.getFrameTree")["frameTree"], None)
+            pw_frames = self._safe(lambda: list(self.page.frames), [])
+            if tree:
+                self._walk_frame_tree(cdp, tree, (), nodes, counter, vw, vh, pw_frames)
 
         obs = Observation(
             url=self._safe(lambda: self.page.url, ""),
@@ -233,163 +314,327 @@ class WebSurface:
         self._last_obs = obs
         return obs
 
+    # -- CDP session -------------------------------------------------------
+
+    def _cdp(self) -> Any:
+        """One CDP session per surface, created lazily and reused.
+
+        Playwright 1.62 removed `page.accessibility` / `frame.accessibility`,
+        so the accessibility tree now comes from the DevTools protocol
+        directly.  Opening a session is not free, hence: exactly one, cached.
+        """
+        if self._cdp_session is not None:
+            return self._cdp_session
+        ctx = self.context if self.context is not None else getattr(self.page, "context", None)
+        if ctx is None:
+            return None
+        sess = self._safe(lambda: ctx.new_cdp_session(self.page), None)
+        if sess is None:
+            return None
+        for domain in ("Accessibility.enable", "Page.enable", "DOM.enable"):
+            self._safe(lambda d=domain: sess.send(d), None)
+        self._cdp_session = sess
+        return sess
+
     # -- frame traversal ---------------------------------------------------
 
-    def _frame_segment(self, frame: Any, index: int, taken: set[str]) -> str:
-        name = _norm(getattr(frame, "name", "") or "")
-        if not name:
-            url = self._safe(lambda: frame.url, "") or ""
-            tail = url.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
-            name = tail or f"f{index}"
-        seg = name
+    def _segment(self, name: str | None, url: str | None, index: int, taken: set[str]) -> str:
+        seg_name = _norm(name or "")
+        if not seg_name:
+            tail = (url or "").rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+            seg_name = tail or f"f{index}"
+        seg = seg_name
         n = 1
         while seg in taken:
             n += 1
-            seg = f"{name}#{n}"
+            seg = f"{seg_name}#{n}"
         taken.add(seg)
         return seg
 
-    def _walk_frame(
+    def _frame_segment(self, frame: Any, index: int, taken: set[str]) -> str:
+        """Legacy naming scheme, kept verbatim: frame `name`, else URL
+        basename, else positional `f{i}`, with `#2` on sibling collisions."""
+        return self._segment(
+            getattr(frame, "name", "") or "", self._safe(lambda: frame.url, "") or "", index, taken
+        )
+
+    def _match_pw_frame(self, cdp_frame: dict, pw_frames: list) -> Any:
+        """Best-effort CDP frame id -> Playwright `Frame`.
+
+        Matched on (name, url), then url, then name.  A frame we cannot match
+        simply yields no live handles; its nodes are still observed.
+        """
+        url = cdp_frame.get("url") or ""
+        name = _norm(cdp_frame.get("name") or "")
+        both = [
+            f for f in pw_frames
+            if self._safe(lambda f=f: f.url, "") == url
+            and _norm(getattr(f, "name", "") or "") == name
+        ]
+        if len(both) == 1:
+            return both[0]
+        by_url = [f for f in pw_frames if url and self._safe(lambda f=f: f.url, "") == url]
+        if len(by_url) == 1:
+            return by_url[0]
+        by_name = [f for f in pw_frames if name and _norm(getattr(f, "name", "") or "") == name]
+        if len(by_name) == 1:
+            return by_name[0]
+        return both[0] if both else None
+
+    def _walk_frame_tree(
         self,
-        frame: Any,
+        cdp: Any,
+        tree: dict,
         frame_path: tuple[str, ...],
         out: list[Node],
         counter: list[int],
         vw: float,
         vh: float,
+        pw_frames: list,
     ) -> None:
-        snap = self._safe(lambda: frame.accessibility.snapshot(interesting_only=False), None)
-        if snap:
-            self._flatten_ax(frame, snap, frame_path, out, counter, vw, vh, depth=0)
+        frame = tree.get("frame") or {}
+        frame_id = frame.get("id")
+        pw_frame = self._match_pw_frame(frame, pw_frames)
+        if frame_id:
+            self._emit_frame_nodes(cdp, frame_id, pw_frame, frame_path, out, counter, vw, vh)
 
         taken: set[str] = set()
-        children = self._safe(lambda: list(frame.child_frames), [])
-        for i, child in enumerate(children):
-            seg = self._frame_segment(child, i, taken)
-            self._walk_frame(child, frame_path + (seg,), out, counter, vw, vh)
+        for i, child in enumerate(tree.get("childFrames") or []):
+            cf = child.get("frame") or {}
+            seg = self._segment(cf.get("name"), cf.get("url"), i, taken)
+            self._walk_frame_tree(
+                cdp, child, frame_path + (seg,), out, counter, vw, vh, pw_frames
+            )
 
-    def _flatten_ax(
+    # -- accessibility tree ------------------------------------------------
+
+    @staticmethod
+    def _ax_order(nodes: list[dict]) -> list[dict]:
+        """Return the flat AX node list in stable pre-order.
+
+        Tree order is not cosmetic: it is the fallback the anchor-relative and
+        scope tiers use when a node has no geometry.
+        """
+        by_id = {n.get("nodeId"): n for n in nodes if n.get("nodeId") is not None}
+        children = {c for n in nodes for c in (n.get("childIds") or [])}
+        roots = [n for n in nodes if n.get("nodeId") not in children]
+        ordered: list[dict] = []
+        seen: set[str] = set()
+
+        def dfs(n: dict) -> None:
+            nid = n.get("nodeId")
+            if nid in seen:
+                return
+            seen.add(nid)
+            ordered.append(n)
+            for cid in n.get("childIds") or []:
+                child = by_id.get(cid)
+                if child is not None:
+                    dfs(child)
+
+        for r in roots or nodes[:1]:
+            dfs(r)
+        for n in nodes:  # anything unreachable via childIds keeps list order
+            if n.get("nodeId") not in seen:
+                ordered.append(n)
+                seen.add(n.get("nodeId"))
+        return ordered
+
+    @staticmethod
+    def _ax_props(ax: dict) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for p in ax.get("properties") or []:
+            name = p.get("name")
+            if name:
+                out[name] = (p.get("value") or {}).get("value")
+        return out
+
+    def _emit_frame_nodes(
         self,
-        frame: Any,
-        ax: dict,
+        cdp: Any,
+        frame_id: str,
+        pw_frame: Any,
         frame_path: tuple[str, ...],
         out: list[Node],
         counter: list[int],
         vw: float,
         vh: float,
-        depth: int,
     ) -> None:
-        if len(out) >= self.config.max_nodes:
-            return
-        role = ax.get("role") or ""
-        name = _norm(ax.get("name"))
-        keep = role not in _NOISE_ROLES and (name or role in _VALUE_ROLES or role == "button")
+        """Pull the AX tree for ONE frame.
 
-        if keep:
+        `Accessibility.getFullAXTree` without a `frameId` returns main-frame
+        nodes only -- iframe content is silently missed, which is fatal on a
+        frameset app.  We therefore ask per frame id.
+        """
+        raw = self._safe(
+            lambda: cdp.send("Accessibility.getFullAXTree", {"frameId": frame_id})["nodes"],
+            None,
+        )
+        if not raw:
+            return
+
+        for ax in self._ax_order(raw):
+            if len(out) >= self.config.max_nodes:
+                return
+            if ax.get("ignored"):
+                continue
+            role = ((ax.get("role") or {}).get("value")) or ""
+            if role in _NOISE_ROLES:
+                continue
+            name = _norm((ax.get("name") or {}).get("value"))
+            if not (name or role in _VALUE_ROLES or role == "button"):
+                continue
+
+            props = self._ax_props(ax)
+            backend_id = ax.get("backendDOMNodeId")
+            info = (
+                self._element_info(cdp, backend_id)
+                if backend_id is not None and role not in _TEXTUAL_ROLES
+                else {}
+            )
+
+            value = props.get("value")
+            if value in (None, ""):
+                value = (ax.get("value") or {}).get("value")
+            if value in (None, "") and role in _VALUE_ROLES:
+                value = info.get("value")
+            value = None if value in (None, "") else str(value)
+
             counter[0] += 1
             ref = f"n{counter[0]}"
-            handle = self._handle_for(frame, role, name)
             node = Node(
                 ref=ref,
                 role=role,
                 name=name,
-                value=self._value_of(ax, handle),
+                value=value,
                 frame_path=frame_path,
-                bbox=self._bbox(handle, vw, vh),
-                dom_path=self._dom_path(handle),
-                text=self._nearby_text(handle) or name or None,
-                enabled=not bool(ax.get("disabled")),
+                bbox=self._bbox(cdp, backend_id, vw, vh),
+                dom_path=info.get("dom_path") or None,
+                text=_norm(info.get("near")) or name or None,
+                enabled=not bool(props.get("disabled")),
             )
             out.append(node)
-            self._ref_index[ref] = (node, handle)
-
-        for child in ax.get("children") or []:
-            self._flatten_ax(frame, child, frame_path, out, counter, vw, vh, depth + 1)
+            self._ref_index[ref] = (
+                node,
+                _HandleSpec(ref=ref, frame=pw_frame, role=role, name=name, backend_id=backend_id),
+            )
 
     # -- per-node enrichment ----------------------------------------------
 
-    def _handle_for(self, frame: Any, role: str, name: str) -> Any:
-        """Best-effort live handle for an ax node, via ARIA role query only.
+    def _bbox(
+        self, cdp: Any, backend_id: int | None, vw: float, vh: float
+    ) -> tuple[float, float, float, float] | None:
+        """Normalized, clamped box from `DOM.getBoxModel`.
 
-        We deliberately never synthesize a CSS selector here.  If the
-        role+name pair is not unique in the frame we return ``None`` rather than
-        picking one; the node still exists in the observation, it simply lacks
-        geometry.  Guessing is the failure mode this whole design exists to
-        avoid.
+        CDP reports the box model in **root-frame viewport coordinates**, so a
+        control inside an iframe already carries the iframe's offset and needs
+        no arithmetic of ours.  A node we cannot box keeps ``bbox=None``: the
+        locator engine has a tree-order fallback, so degrading beats crashing.
         """
-        if not role:
+        if cdp is None or backend_id is None or vw <= 0 or vh <= 0:
             return None
-        try:
-            loc = frame.get_by_role(role, name=name, exact=True) if name else frame.get_by_role(role)
-            if loc.count() != 1:
-                return None
-            return loc.first
-        except Exception:
+        quad = self._safe(
+            lambda: cdp.send("DOM.getBoxModel", {"backendNodeId": backend_id})["model"]["border"],
+            None,
+        )
+        if not quad or len(quad) < 8:
             return None
-
-    def _bbox(self, handle: Any, vw: float, vh: float) -> tuple[float, float, float, float] | None:
-        if handle is None or vw <= 0 or vh <= 0:
-            return None
-        box = self._safe(lambda: handle.bounding_box(), None)
-        if not box:
-            return None
+        xs, ys = quad[0::2], quad[1::2]
+        x, y = min(xs), min(ys)
+        w, h = max(xs) - x, max(ys) - y
 
         def clamp(v: float) -> float:
             return max(0.0, min(1.0, v))
 
-        return (
-            clamp(box["x"] / vw),
-            clamp(box["y"] / vh),
-            clamp(box["width"] / vw),
-            clamp(box["height"] / vh),
-        )
+        return (clamp(x / vw), clamp(y / vh), clamp(w / vw), clamp(h / vh))
 
-    def _dom_path(self, handle: Any) -> str | None:
-        """Recorded for STRUCTURAL tier -- deliberately distrusted, never used
-        as the primary way to find anything."""
-        if handle is None:
-            return None
-        return self._safe(
-            lambda: handle.evaluate(
-                """el => { const p=[]; let n=el;
-                    while (n && n.nodeType===1 && p.length<25) {
-                      let s=n.nodeName.toLowerCase();
-                      const par=n.parentNode;
-                      if (par) { const sibs=[...par.children].filter(c=>c.nodeName===n.nodeName);
-                        if (sibs.length>1) s += '[' + (sibs.indexOf(n)+1) + ']'; }
-                      p.unshift(s); n=par; }
-                    return p.join('/'); }"""
+    def _element_info(self, cdp: Any, backend_id: int | None) -> dict:
+        """One round trip for `dom_path`, nearby label text and live value.
+
+        Only asked for nodes that can actually be acted upon -- resolving every
+        StaticText would triple the cost of `observe()` for nothing.
+        """
+        if cdp is None or backend_id is None:
+            return {}
+        obj = self._safe(
+            lambda: cdp.send("DOM.resolveNode", {"backendNodeId": backend_id})["object"], None
+        )
+        object_id = (obj or {}).get("objectId")
+        if not object_id:
+            return {}
+        res = self._safe(
+            lambda: cdp.send(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": object_id,
+                    "functionDeclaration": _ELEMENT_INFO_JS,
+                    "returnByValue": True,
+                },
             ),
             None,
         )
+        self._safe(lambda: cdp.send("Runtime.releaseObject", {"objectId": object_id}), None)
+        val = ((res or {}).get("result") or {}).get("value")
+        return val if isinstance(val, dict) else {}
 
-    def _nearby_text(self, handle: Any) -> str | None:
-        """Text of the nearest meaningful ancestor -- the row/cell label that is
-        the only stable anchor on a table-based legacy screen."""
-        if handle is None:
+    # -- live handles ------------------------------------------------------
+
+    def _live_handle(self, spec: "_HandleSpec | None") -> Any:
+        """A UNIQUE live handle for a node, or ``None``.
+
+        Tried in order: the ARIA role+name query (unchanged from before), then
+        a `backendDOMNodeId`-anchored marker attribute.  Both must resolve to
+        exactly one element; anything else returns ``None`` so `act()` refuses
+        rather than guessing.  Resolution is lazy -- `observe()` never pays for
+        handles nobody asks for.
+        """
+        if spec is None or spec.frame is None:
             return None
-        raw = self._safe(
-            lambda: handle.evaluate(
-                """el => { let n=el;
-                    for (let i=0;i<4 && n;i++) {
-                      n = n.parentElement;
-                      if (!n) break;
-                      const t=(n.innerText||'').trim();
-                      if (t && t.length<200) return t;
-                    } return ''; }"""
+        frame = spec.frame
+        if spec.role:
+            loc = self._safe(
+                lambda: (
+                    frame.get_by_role(spec.role, name=spec.name, exact=True)
+                    if spec.name
+                    else frame.get_by_role(spec.role)
+                ),
+                None,
+            )
+            if loc is not None and self._safe(lambda: loc.count(), -1) == 1:
+                return loc.first
+
+        if spec.backend_id is None:
+            return None
+        cdp = self._cdp()
+        if cdp is None:
+            return None
+        obj = self._safe(
+            lambda: cdp.send("DOM.resolveNode", {"backendNodeId": spec.backend_id})["object"],
+            None,
+        )
+        object_id = (obj or {}).get("objectId")
+        if not object_id:
+            return None
+        marker = f"cua-{spec.ref}"
+        ok = self._safe(
+            lambda: cdp.send(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": object_id,
+                    "functionDeclaration": _MARK_JS,
+                    "arguments": [{"value": marker}],
+                    "returnByValue": True,
+                },
             ),
             None,
         )
-        raw = _norm(raw)
-        return raw[:200] or None
-
-    def _value_of(self, ax: dict, handle: Any) -> str | None:
-        v = ax.get("value")
-        if v not in (None, ""):
-            return str(v)
-        if handle is None:
+        self._safe(lambda: cdp.send("Runtime.releaseObject", {"objectId": object_id}), None)
+        if not (((ok or {}).get("result") or {}).get("value")):
             return None
-        return self._safe(lambda: handle.input_value(), None) or None
+        loc = self._safe(lambda: frame.locator(f'[{_MARK_ATTR}="{marker}"]'), None)
+        if loc is not None and self._safe(lambda: loc.count(), -1) == 1:
+            return loc.first
+        return None
 
     def _viewport(self) -> tuple[float, float]:
         vp = self._safe(lambda: self.page.viewport_size, None)
@@ -510,8 +755,8 @@ class WebSurface:
                         f"({len(self._ref_index)} refs); observe() again before acting"
                     ),
                 )
-            node, handle = entry
-            return node, handle, ActResult(ok=True, resolved_tier=None, candidates=1)
+            node, spec = entry
+            return node, self._live_handle(spec), ActResult(ok=True, resolved_tier=None, candidates=1)
 
         if action.target is None:
             return None, None, ActResult(
@@ -549,8 +794,8 @@ class WebSurface:
                 candidates=cands,
             )
 
-        handle = self._ref_index.get(node.ref, (None, None))[1]
-        return node, handle, ActResult(
+        spec = self._ref_index.get(node.ref, (None, None))[1]
+        return node, self._live_handle(spec), ActResult(
             ok=True,
             resolved_tier=int(tier) if tier is not None else None,
             candidates=cands,

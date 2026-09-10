@@ -35,6 +35,14 @@ LABELISH_ROLES = frozenset(
         "static text",
         "cell",
         "gridcell",
+        # Chromium reports legacy <table>-for-layout cells as LayoutTableCell
+        # rather than cell. That IS the target-app shape -- table-soup screens
+        # where the printed label beside a field is the only stable handle --
+        # so excluding these would blind the anchor tier on exactly the case it
+        # exists to serve.
+        "layouttablecell",
+        "layouttablerow",
+        "layouttable",
         "columnheader",
         "rowheader",
         "heading",
