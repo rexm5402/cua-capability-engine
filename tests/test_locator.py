@@ -427,3 +427,210 @@ def test_build_bundle_refuses_to_record_an_indistinguishable_node():
     obs = Observation(url="u", title="t", nodes=(a, b))
     with pytest.raises(ValueError, match="no candidate strategy uniquely"):
         build_bundle(a, obs)
+
+
+# --------------------------------------------------------------------------
+# Scope-then-unique: results grids
+# --------------------------------------------------------------------------
+
+
+def _grid(order: tuple[str, ...]) -> Observation:
+    """A results grid: id cell / name cell / identical "View" + "Edit" buttons
+    per row -- the shape every list interaction fails on.
+
+    ``order`` gives the row ids top to bottom, so the same rows can be handed
+    back in a different order to model a re-sorted list.
+    """
+    names = {"10001": "Ada Lovelace", "10002": "Grace Hopper", "10003": "Alan Turing"}
+    nodes = [
+        _n("h1", "heading", "Results", (20, 40, 300, 30), "/html/body/h1"),
+    ]
+    for i, rid in enumerate(order):
+        y = 100.0 + 40 * i
+        nodes.append(
+            _n(f"c_id_{rid}", "cell", rid, (20, y, 100, 24),
+               f"/html/body/table/tr[{i + 1}]/td[1]")
+        )
+        nodes.append(
+            _n(f"c_name_{rid}", "cell", names[rid], (140, y, 200, 24),
+               f"/html/body/table/tr[{i + 1}]/td[2]")
+        )
+        nodes.append(
+            _n(f"b_view_{rid}", "button", "View", (360, y, 80, 24),
+               f"/html/body/table/tr[{i + 1}]/td[3]/button[1]")
+        )
+        nodes.append(
+            _n(f"b_edit_{rid}", "button", "Edit", (460, y, 80, 24),
+               f"/html/body/table/tr[{i + 1}]/td[3]/button[2]")
+        )
+    return Observation(url="https://bank.example/results", title="Results",
+                       nodes=tuple(nodes))
+
+
+@pytest.fixture
+def obs_grid() -> Observation:
+    return _grid(("10001", "10002", "10003"))
+
+
+def test_grid_view_button_is_ambiguous_without_scope(obs_grid):
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+    )
+    res = resolve(bundle, obs_grid)
+    assert res.node is None
+    assert res.candidates == 3
+    assert "ambiguous" in res.reason
+    assert "unscoped" in res.reason
+
+
+def test_scope_text_picks_the_right_rows_button(obs_grid):
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+        scope_text="10002",
+    )
+    res = resolve(bundle, obs_grid)
+    assert res.node is not None, res.reason
+    assert res.node.ref == "b_view_10002"
+    assert res.tier == 1
+    assert "10002" in res.reason
+
+
+def test_scope_text_matching_nothing_fails_without_global_fallback(obs_grid):
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+        scope_text="99999",
+    )
+    res = resolve(bundle, obs_grid)
+    assert res.node is None
+    assert "matched no node" in res.reason
+    assert "'99999'" in res.reason
+
+
+def test_scope_text_matching_nothing_fails_even_when_globally_unique(obs_grid):
+    """The unscoped bundle would resolve; scoping must not silently widen."""
+    heading = LocatorBundle(
+        description="the Results heading",
+        strategies=[SemanticLocator(role="heading", name="Results")],
+    )
+    assert resolve(heading, obs_grid).node is not None
+    scoped = LocatorBundle(
+        description="the Results heading",
+        strategies=[SemanticLocator(role="heading", name="Results")],
+        scope_text="99999",
+    )
+    res = resolve(scoped, obs_grid)
+    assert res.node is None
+    assert "matched no node" in res.reason
+
+
+def test_scope_text_matching_multiple_regions_is_ambiguous():
+    """Two rows both carrying "Pending": disjoint regions, so we refuse."""
+    nodes = (
+        _n("c_id_1", "cell", "10001", (20, 100, 100, 24), "/t/tr[1]/td[1]"),
+        _n("c_st_1", "cell", "Pending", (140, 100, 100, 24), "/t/tr[1]/td[2]"),
+        _n("b_1", "button", "View", (360, 100, 80, 24), "/t/tr[1]/td[3]/button"),
+        _n("c_id_2", "cell", "10002", (20, 140, 100, 24), "/t/tr[2]/td[1]"),
+        _n("c_st_2", "cell", "Pending", (140, 140, 100, 24), "/t/tr[2]/td[2]"),
+        _n("b_2", "button", "View", (360, 140, 80, 24), "/t/tr[2]/td[3]/button"),
+    )
+    obs = Observation(url="u", title="t", nodes=nodes)
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+        scope_text="Pending",
+    )
+    res = resolve(bundle, obs)
+    assert res.node is None
+    assert "ambiguous" in res.reason
+    assert "2 disjoint regions" in res.reason
+
+
+def test_scoped_resolution_survives_row_reordering(obs_grid):
+    """The cross-tenant durability case: the row moves, the scope still finds
+    that row's button -- and NOT the button now sitting where it used to be."""
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+        scope_text="10002",
+    )
+    before = resolve(bundle, obs_grid)
+    assert before.node.ref == "b_view_10002"
+    assert before.node.bbox[1] == 140.0
+
+    reordered = _grid(("10003", "10002", "10001"))
+    after = resolve(bundle, reordered)
+    assert after.node is not None, after.reason
+    assert after.node.ref == "b_view_10002"
+
+    moved = _grid(("10002", "10003", "10001"))
+    res = resolve(bundle, moved)
+    assert res.node is not None, res.reason
+    assert res.node.ref == "b_view_10002"
+    assert res.node.bbox[1] == 100.0  # the row genuinely moved to the top
+
+
+def test_scope_region_only_spans_its_own_row(obs_grid):
+    """Scoping must not leak into neighbouring rows."""
+    bundle = LocatorBundle(
+        description="the name cell",
+        strategies=[TextLocator(text="Grace Hopper", match="normalized")],
+        scope_text="10001",
+    )
+    res = resolve(bundle, obs_grid)
+    assert res.node is None
+    assert "no node matched" in res.reason
+
+
+def test_build_bundle_records_scope_text_for_ambiguous_grid_button(obs_grid):
+    """The second button in a row: globally ambiguous, and not even reachable
+    by the anchor tier (the row label's nearest button is "View"). Scoping is
+    the only durable way to record it."""
+    target = next(n for n in obs_grid.nodes if n.ref == "b_edit_10002")
+    bundle = build_bundle(target, obs_grid)
+    assert bundle.scope_text is not None
+    assert normalize(bundle.scope_text) == "10002"
+    # and it round-trips to the same node, at a durable tier
+    res = resolve(bundle, obs_grid)
+    assert res.node is not None, res.reason
+    assert res.node.ref == "b_edit_10002"
+    assert res.tier <= 3
+
+
+def test_recorded_scoped_bundle_round_trips_after_reordering(obs_grid):
+    target = next(n for n in obs_grid.nodes if n.ref == "b_edit_10003")
+    bundle = build_bundle(target, obs_grid)
+    assert bundle.scope_text is not None
+    res = resolve(bundle, _grid(("10003", "10001", "10002")))
+    assert res.node is not None, res.reason
+    assert res.node.ref == "b_edit_10003"
+
+
+def test_build_bundle_still_records_unscoped_when_globally_unique(obs_v1):
+    bundle = build_bundle(
+        next(n for n in obs_v1.nodes if n.ref == "b_search"), obs_v1
+    )
+    assert bundle.scope_text is None
+
+
+def test_scope_falls_back_to_tree_order_when_bboxes_are_missing():
+    """No geometry at all: the region is the dom-order run after the anchor."""
+    nodes = (
+        Node(ref="c1", role="cell", name="10001"),
+        Node(ref="n1", role="cell", name="Ada Lovelace"),
+        Node(ref="b1", role="button", name="View"),
+        Node(ref="c2", role="cell", name="10002"),
+        Node(ref="n2", role="cell", name="Grace Hopper"),
+        Node(ref="b2", role="button", name="View"),
+    )
+    obs = Observation(url="u", title="t", nodes=nodes)
+    bundle = LocatorBundle(
+        description='the "View" button',
+        strategies=[SemanticLocator(role="button", name="View")],
+        scope_text="10002",
+    )
+    res = resolve(bundle, obs)
+    assert res.node is not None, res.reason
+    assert res.node.ref == "b2"

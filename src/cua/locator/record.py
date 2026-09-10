@@ -20,7 +20,7 @@ from cua.artifact import (
     StructuralLocator,
     TextLocator,
 )
-from cua.locator.resolve import normalize, resolve
+from cua.locator.resolve import _same_row, normalize, resolve
 from cua.surface.base import Node, Observation
 
 __all__ = ["build_bundle", "describe", "find_anchor_candidates"]
@@ -148,11 +148,84 @@ def _is_labelish(n: Node) -> bool:
     return role in {r.replace(" ", "") for r in LABELISH_ROLES} or role == ""
 
 
-def _validates(strategy: LocatorStrategy, node: Node, obs: Observation) -> bool:
-    """A strategy is kept only if, on its own, it uniquely returns ``node``."""
-    probe = LocatorBundle(description="validation probe", strategies=[strategy])
+def _validates(
+    strategy: LocatorStrategy,
+    node: Node,
+    obs: Observation,
+    scope_text: str | None = None,
+) -> bool:
+    """A strategy is kept only if, on its own (under ``scope_text`` when given),
+    it uniquely returns ``node``."""
+    probe = LocatorBundle(
+        description="validation probe", strategies=[strategy], scope_text=scope_text
+    )
     res = resolve(probe, obs)
     return res.node is not None and res.node.ref == node.ref
+
+
+def _scope_text_candidates(node: Node, obs: Observation) -> list[str]:
+    """Plausible row-identifying texts for the region containing ``node``.
+
+    The band is derived the same way :mod:`cua.locator.resolve` derives a scope
+    region -- SAME_ROW geometry when bboxes exist, tree order otherwise -- and
+    the identifying text is the leftmost label-ish node in that band (the first
+    cell of the row, in table terms).
+    """
+    if node.bbox is not None:
+        band = [
+            n
+            for n in obs.nodes
+            if n.ref != node.ref
+            and n.frame_path == node.frame_path
+            and n.bbox is not None
+            and _same_row(node.bbox, n.bbox)
+        ]
+        band.sort(key=lambda n: (n.bbox[0], n.ref))
+    else:
+        # No geometry: the row is the tree-order run, so walk backwards from
+        # the target to the label-ish nodes that precede it in the same frame.
+        order = list(obs.nodes)
+        idx = next(
+            (i for i, n in enumerate(order) if n.ref == node.ref), len(order)
+        )
+        band = [n for n in order[:idx] if n.frame_path == node.frame_path]
+        band.reverse()
+
+    out: list[str] = []
+    for n in band:
+        if not _is_labelish(n):
+            continue
+        text = _anchor_text_of(n)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _scoped_bundle(
+    node: Node, obs: Observation, require_durable: bool = False
+) -> LocatorBundle | None:
+    """Last chance before giving up: a target that is ambiguous globally may
+    still be unique inside its own row. Record that row's identifying text as
+    ``scope_text`` rather than refusing to record the control at all."""
+    candidates = _candidates(node, obs)
+    for scope_text in _scope_text_candidates(node, obs)[:6]:
+        kept: list[LocatorStrategy] = []
+        seen: set[str] = set()
+        for strategy in candidates:
+            key = strategy.model_dump_json()
+            if key in seen:
+                continue
+            seen.add(key)
+            if _validates(strategy, node, obs, scope_text=scope_text):
+                kept.append(strategy)
+        if require_durable and not any(int(st.tier) <= 3 for st in kept):
+            continue
+        if kept:
+            kept.sort(key=lambda st: int(st.tier))
+            return LocatorBundle(
+                description=describe(node), strategies=kept, scope_text=scope_text
+            )
+    return None
 
 
 def _candidates(node: Node, obs: Observation) -> list[LocatorStrategy]:
@@ -247,11 +320,24 @@ def build_bundle(node: Node, obs: Observation) -> LocatorBundle:
         if _validates(strategy, node, obs):
             kept.append(strategy)
 
+    # A node whose only global identity is structural/geometric is exactly the
+    # list case: eight identical "View" buttons, told apart only by dom index or
+    # pixels. If it IS durably identifiable inside its own row, record that row
+    # as scope rather than shipping a bundle that drifts on the first reskin.
+    if kept and not any(int(s.tier) <= 3 for s in kept):
+        scoped = _scoped_bundle(node, obs, require_durable=True)
+        if scoped is not None:
+            return scoped
+
     if not kept:
+        scoped = _scoped_bundle(node, obs)
+        if scoped is not None:
+            return scoped
         raise ValueError(
             f"cannot record {describe(node)}: no candidate strategy uniquely "
-            f"resolved it in this observation (ref={node.ref!r}). Recording an "
-            "ambiguous locator is worse than recording none."
+            f"resolved it in this observation (ref={node.ref!r}), and no row "
+            "scope disambiguated it either. Recording an ambiguous locator is "
+            "worse than recording none."
         )
     kept.sort(key=lambda s: int(s.tier))
     return LocatorBundle(description=describe(node), strategies=kept)

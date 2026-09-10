@@ -222,11 +222,17 @@ def _tree_band(anchor: Node, obs: Observation) -> list[Node]:
     if ai is None:
         return []
     band = [nodes[ai]]
+    saw_other_role = False
     for n in nodes[ai + 1 :]:
         if n.frame_path != anchor.frame_path:
             break
         if _role_eq(n.role, anchor.role):
-            break
+            # A repeat of the anchor's own role, after the rest of the row has
+            # gone by, is the next row's identifying cell: the band ends here.
+            if saw_other_role:
+                break
+        else:
+            saw_other_role = True
         band.append(n)
     return band
 
