@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,28 @@ def _parse_inputs(pairs: list[str]) -> dict[str, str]:
         k, v = p.split("=", 1)
         out[k.strip()] = v
     return out
+
+
+def _load_profile(path: str | None):
+    """App-level knowledge (signals, outcomes, product identity) kept separate
+    from any one capability, so another institution on the same vendor product
+    is a data overlay rather than a re-recording."""
+    if not path:
+        return None
+    import yaml
+
+    from cua.artifact import OutcomeSpec, SignalRule
+    from cua.discovery.compile import AppProfile
+
+    d = yaml.safe_load(Path(path).read_text()) or {}
+    return AppProfile(
+        app_id=d.get("app_id", "unknown"),
+        vendor_product=d.get("vendor_product", "unknown"),
+        product_version=d.get("product_version"),
+        tenant_id=d.get("tenant_id"),
+        signals=[SignalRule.model_validate(x) for x in d.get("signals", [])],
+        outcomes=[OutcomeSpec.model_validate(x) for x in d.get("outcomes", [])],
+    )
 
 
 def _load_capability(path: str):
@@ -92,6 +115,7 @@ def cmd_discover(a: argparse.Namespace) -> int:
     from cua.discovery.verify import verify_and_save
     from cua.evidence.recorder import EvidenceRecorder
     from cua.llm.client import build_client
+    from cua.session.provider import authenticate
 
     llm = build_client(a.provider, a.model)
     print(f"discovery: model={llm.model} vision={llm.supports_vision}")
@@ -101,6 +125,10 @@ def cmd_discover(a: argparse.Namespace) -> int:
 
     with EvidenceRecorder(_run_id("discovery"), "discovery") as rec:
         with _surface(a.url, headless=a.headless, app_id=a.app_id, tenant=a.tenant) as s:
+            if not a.no_auth:
+                # Authenticate FIRST so the recorded flow begins post-login and
+                # no credential can reach the artifact.
+                authenticate(s)
             traj = discover(
                 a.goal, a.url, s, llm=llm, inputs=inputs, gate=gate,
                 recorder=rec, max_steps=a.max_steps,
@@ -108,14 +136,49 @@ def cmd_discover(a: argparse.Namespace) -> int:
         if not traj.succeeded:
             print(f"discovery did not complete: {traj.stop_reason}", file=sys.stderr)
             return 1
-        cap = compile_trajectory(traj, a.goal)
+        cap = compile_trajectory(
+            traj, a.goal,
+            profile=_load_profile(a.profile),
+            name=a.name,
+            entry_url=a.url,
+        )
 
     # Verify BEFORE saving: an artifact reaches disk only once it has been
     # proven to run with the model switched off.
-    def factory():
-        return _surface(a.url, headless=True, app_id=a.app_id, tenant=a.tenant)
+    # Each verification replay gets a FRESH, separately-authenticated session:
+    # reusing the discovery session would let leftover state make a broken
+    # artifact look reproducible.
+    # Verification replays run SEQUENTIALLY, and Playwright's sync API cannot
+    # be nested in one thread, so each new session closes the previous one.
+    slot: list[ExitStack] = []
 
-    saved = verify_and_save(cap, factory, a.out, discovery_inputs=inputs)
+    def factory(*_args, **_kw):
+        while slot:
+            slot.pop().close()
+        stack = ExitStack()
+        slot.append(stack)
+        s = stack.enter_context(
+            _surface(a.url, headless=True, app_id=a.app_id, tenant=a.tenant)
+        )
+        if cap.auth.required and not a.no_auth:
+            authenticate(s)
+        return s
+
+    def _report(r):
+        print(f"verification: mode={r.mode} ok={r.ok}")
+        if r.reason:
+            print(f"  reason: {r.reason}")
+
+    try:
+        saved = verify_and_save(
+            cap, factory, a.out,
+            discovery_inputs=inputs,
+            verify_inputs=_parse_inputs(a.verify_input) or None,
+            on_report=_report,
+        )
+    finally:
+        while slot:
+            slot.pop().close()
     if saved is None:
         print(
             "verification replay FAILED -- artifact not written. The flow the "
@@ -130,21 +193,31 @@ def cmd_discover(a: argparse.Namespace) -> int:
 def cmd_replay(a: argparse.Namespace) -> int:
     from cua.evidence.recorder import EvidenceRecorder
     from cua.replay.engine import replay
+    from cua.session.provider import authenticate
     from cua.telemetry import TelemetryStore
 
     cap = _load_capability(a.artifact)
     inputs = _parse_inputs(a.input)
     url = cap.entry_url
-    if a.inject:
-        # The fixture app can be told to misbehave, which is how the error
-        # taxonomy gets exercised deliberately rather than opportunistically.
-        url = f"{url}{'&' if '?' in url else '?'}inject={a.inject}"
 
     with EvidenceRecorder(
         _run_id("replay"), "replay", capability_id=cap.id
     ) as rec:
         with _surface(url, headless=a.headless, app_id=cap.app_profile.app_id,
                       tenant=a.tenant) as s:
+            if cap.auth.required and not a.no_auth:
+                authenticate(s)
+            if a.inject:
+                # Arm the fault AFTER authenticating. The fixture's universal
+                # modes fire on the next request, so arming it on the entry URL
+                # would break the login rather than the flow under test.
+                from cua.artifact import ActionType
+                from cua.surface.base import Action
+
+                base = url.split("/search")[0]
+                s.act(Action(type=ActionType.NAVIGATE,
+                             url=f"{base}/admin/inject/{a.inject}"))
+                s.act(Action(type=ActionType.NAVIGATE, url=url))
             outcome = replay(
                 cap, inputs, s, gate=_gate(a.policy), recorder=rec,
                 telemetry=TelemetryStore(),
@@ -194,6 +267,8 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--headless", action="store_true",
                         help="headed by default so a human can take over")
         sp.add_argument("--input", action="append", default=[], metavar="NAME=VALUE")
+        sp.add_argument("--no-auth", action="store_true",
+                        help="skip pre-authentication")
 
     d = sub.add_parser("discover", help="LLM-driven discovery run")
     d.add_argument("--goal", required=True)
@@ -203,6 +278,17 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--provider", default=None, help="xai (default) | openai")
     d.add_argument("--model", default=None)
     d.add_argument("--max-steps", type=int, default=25)
+    d.add_argument("--profile", default=None,
+                   help="app profile YAML supplying signals, outcomes and "
+                        "product identity (see profiles/)")
+    d.add_argument("--name", default=None, help="capability name")
+    d.add_argument("--verify-input", action="append", default=[], metavar="NAME=VALUE",
+                   help="a SECOND, real input used for the verification replay. "
+                        "Verification deliberately replays with a different "
+                        "value so a literal baked in place of a parameter "
+                        "fails; a derived value can match the shape of a real "
+                        "one but cannot know which values actually exist in "
+                        "the system, so the operator supplies it.")
     common(d)
     d.set_defaults(func=cmd_discover)
 

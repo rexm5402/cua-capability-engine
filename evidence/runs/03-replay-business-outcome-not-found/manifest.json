@@ -1,0 +1,31 @@
+{
+  "run_id": "replay-20260910T230448Z",
+  "kind": "replay",
+  "capability_id": "cap-discovery-7c73a918bd18",
+  "started_at": "2026-09-10T23:04:48.037+00:00",
+  "ended_at": "2026-09-10T23:06:10.652+00:00",
+  "steps": 2,
+  "final_outcome": {
+    "kind": "business_outcome",
+    "capability_id": "cap-discovery-7c73a918bd18",
+    "code": "record_not_found",
+    "message": "No member exists with that id.",
+    "outputs": {},
+    "at_step_id": "s2",
+    "evidence_dir": "evidence/runs/replay-20260910T230448Z"
+  },
+  "attachments": [],
+  "environment": {
+    "python": "3.13.3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "hostname": "Mac",
+    "pid": 34608
+  },
+  "redaction": {
+    "enabled": true,
+    "bound_params": [
+      "member_id"
+    ]
+  }
+}

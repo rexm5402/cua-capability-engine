@@ -1,0 +1,223 @@
+app_profile:
+  app_id: corebanking
+  base_artifact_id: null
+  product_version: '4.2'
+  tenant_id: first-meridian
+  vendor_product: CoreTeller
+approval_state: draft
+auth:
+  provider: session_provider
+  required: true
+  scope: null
+description: look up member 10001 and read their current savings balance. Type the member id into the
+  Member ID field FIRST, then press Retrieve once.
+entry_url: http://localhost:5055/search
+id: cap-discovery-7c73a918bd18
+inputs:
+- description: Input 'member_id', supplied by the calling agent.
+  example: null
+  name: member_id
+  pattern: null
+  required: true
+  sensitivity: pii
+  type: string
+name: lookup_member_balance
+outputs:
+- description: Read the member's current savings balance from the detail page
+  item_type: null
+  name: savings_balance
+  sensitivity: public
+  shape: null
+  source_step_id: s3
+  type: string
+possible_outcomes:
+- code: record_not_found
+  description: No member exists with the supplied member id.
+  partial_outputs: []
+- code: permission_denied
+  description: The operator is not authorized to view this record.
+  partial_outputs: []
+- code: validation_rejected
+  description: The submitted form was rejected by a field-level validation rule.
+  partial_outputs: []
+provenance:
+  discovery_run_id: discovery-7c73a918bd18
+  recorded_at: '2026-09-10T22:58:58+00:00'
+  recorded_by_model: gpt-oss:120b-cloud
+  verification_mode: full_replay
+  verified_at: '2026-09-10T23:02:24+00:00'
+  verified_with_inputs: {}
+risk_class: read_only
+schema_version: '1.0'
+signals:
+- classification: business
+  code: record_not_found
+  handler: return
+  locator: null
+  max_attempts: 2
+  message: No member exists with that id.
+  text_present: No records located
+- classification: business
+  code: permission_denied
+  handler: return
+  locator: null
+  max_attempts: 2
+  message: The operator is not authorized to view this record.
+  text_present: not authorized to view this record
+- classification: business
+  code: validation_rejected
+  handler: return
+  locator: null
+  max_attempts: 2
+  message: The form was rejected by a field-level validation rule.
+  text_present: Field in error
+- classification: recoverable
+  code: maintenance_interstitial
+  handler: dismiss
+  locator: null
+  max_attempts: 2
+  message: Dismissing the maintenance interstitial.
+  text_present: scheduled maintenance window is pending
+- classification: recoverable
+  code: session_expired
+  handler: reauth
+  locator: null
+  max_attempts: 1
+  message: Session expired; re-authenticating.
+  text_present: Your session has expired
+- classification: hard
+  code: application_error
+  handler: null
+  locator: null
+  max_attempts: 2
+  message: The application returned an error page.
+  text_present: Unhandled exception
+steps:
+- action: type
+  baseline_tier: 1
+  id: s1
+  intent: Enter the provided member ID into the Member ID field as required.
+  output_name: null
+  post_condition:
+    description: 'step s1: the "Search Criteria Member ID 10001 Branch Code Include Closed Accounts Retrieve"
+      LayoutTableCell is present'
+    locator:
+      description: the "Search Criteria Member ID 10001 Branch Code Include Closed Accounts Retrieve"
+        LayoutTableCell
+      scope_text: null
+      strategies:
+      - dom_path: html/body/table/tbody/tr/td/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr/td
+        frame_path:
+        - workArea
+        tier: 4
+    text_absent: null
+    text_present: null
+    timeout_ms: 10000
+    url_matches: null
+  retries: 0
+  risk: read_only
+  target:
+    description: the "Member ID" textbox
+    scope_text: null
+    strategies:
+    - name: Member ID
+      name_match: normalized
+      role: textbox
+      scope: []
+      tier: 1
+    - name: Member ID
+      name_match: normalized
+      role: textbox
+      scope:
+      - workArea
+      tier: 1
+    - match: normalized
+      nth: 0
+      role: textbox
+      text: Member ID
+      tier: 3
+    - dom_path: tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[2]/td[2]/input
+      frame_path:
+      - workArea
+      tier: 4
+  timeout_ms: 10000
+  value:
+    literal: null
+    param: member_id
+- action: click
+  baseline_tier: 1
+  id: s2
+  intent: Submit the member ID to retrieve member details
+  output_name: null
+  post_condition:
+    description: 'step s2: landed on http://localhost:5055/member/:member_id'
+    locator: null
+    text_absent: null
+    text_present: null
+    timeout_ms: 10000
+    url_matches: ^http://localhost:5055/member/[^/?&#]+$
+  retries: 0
+  risk: read_only
+  target:
+    description: the "Retrieve" button
+    scope_text: null
+    strategies:
+    - name: Retrieve
+      name_match: normalized
+      role: button
+      scope: []
+      tier: 1
+    - name: Retrieve
+      name_match: normalized
+      role: button
+      scope:
+      - workArea
+      tier: 1
+    - match: normalized
+      nth: 0
+      role: button
+      text: Search Criteria Member ID Branch Code Include Closed Accounts
+      tier: 3
+    - dom_path: tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/form/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[5]/td[2]/input
+      frame_path:
+      - workArea
+      tier: 4
+  timeout_ms: 10000
+  value: null
+- action: read
+  baseline_tier: 1
+  id: s3
+  intent: Read the member's current savings balance from the detail page
+  output_name: savings_balance
+  post_condition: null
+  retries: 0
+  risk: read_only
+  target:
+    description: the "$ 4,182.55" LayoutTableCell
+    scope_text: null
+    strategies:
+    - name: $ 4,182.55
+      name_match: normalized
+      role: LayoutTableCell
+      scope: []
+      tier: 1
+    - name: $ 4,182.55
+      name_match: normalized
+      role: LayoutTableCell
+      scope:
+      - workArea
+      tier: 1
+    - dom_path: body/table/tbody/tr/td/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td/table[1]/tbody/tr/td/table/tbody/tr[7]/td[2]
+      frame_path:
+      - workArea
+      tier: 4
+  timeout_ms: 10000
+  value: null
+success:
+  description: 'capability succeeded: landed on http://localhost:5055/member/:member_id'
+  locator: null
+  text_absent: null
+  text_present: null
+  timeout_ms: 10000
+  url_matches: ^http://localhost:5055/member/[^/?&#]+$
+version: 1.0.0

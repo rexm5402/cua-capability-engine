@@ -30,6 +30,7 @@ from __future__ import annotations
 import inspect
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Callable
 
 import yaml
@@ -296,6 +297,7 @@ def verify_and_save(
     gate: PolicyGate | None = None,
     recorder: EvidenceRecorder | None = None,
     require_outputs_differ: bool = True,
+    on_report: "Callable[[VerificationReport], None] | None" = None,
 ) -> Path | None:
     """Verify, then write. Returns the path, or ``None`` if nothing was written.
 
@@ -314,6 +316,9 @@ def verify_and_save(
         )
     except Exception as exc:  # a crash during verification is a failed verification
         report = VerificationReport(ok=False, mode="none", reason=f"verification raised {exc!r}")
+
+    if on_report is not None:
+        on_report(report)
 
     if not report.ok:
         if recorder is not None:

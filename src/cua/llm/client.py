@@ -152,6 +152,17 @@ def build_client(provider: str | None = None, model: str | None = None) -> LLMCl
             base_url="https://api.x.ai/v1",
             env_key="XAI_API_KEY",
         )
+    if provider == "ollama":
+        # Ollama serves an OpenAI-compatible endpoint, so local models and
+        # Ollama Cloud models (the `-cloud` suffixed ones) both arrive through
+        # the same client. No API key: the endpoint is on this machine.
+        return OpenAICompatClient(
+            model=model or os.environ.get("CUA_LLM_MODEL", "qwen3:8b"),
+            base_url=os.environ.get("OLLAMA_HOST_URL", "http://localhost:11434/v1"),
+            api_key="ollama",  # placeholder; the local server ignores it
+            vision=False,
+            env_key="OLLAMA_API_KEY",
+        )
     if provider in {"nvidia", "nim"}:
         # NVIDIA NIM speaks the OpenAI Chat Completions shape, so it needs no
         # adapter of its own -- which is the point of keeping the discovery

@@ -701,9 +701,13 @@ def _execute_step(run: _Run, step: Step) -> ReplayOutcome | None:
                         expected=f"dismissing {match.code!r} to clear the page",
                         observed=res.detail,
                     )
-                # Re-evaluate without re-performing the original action: the
-                # click already landed; only the interstitial was in the way.
-                do_action = False
+                # Whether to re-perform the original action depends on whether
+                # it actually landed. If it succeeded and the interstitial only
+                # appeared afterwards, redoing it would double the effect. If it
+                # FAILED because the interstitial was covering the control, the
+                # step has not happened yet and must be retried now that the
+                # page is clear.
+                do_action = last_result is not None and not last_result.ok
                 continue
             if handler == "reauth":
                 if not run.reauth(step):

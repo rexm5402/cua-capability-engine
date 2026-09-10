@@ -1,0 +1,58 @@
+# App profile for the CoreTeller 4.2 vendor product (tenant A: First Meridian).
+#
+# Signals and outcomes live here rather than on a capability because "the error
+# banner reads 'No records located.'" is a fact about the VENDOR PRODUCT, not
+# about any one flow. That is what makes another institution running the same
+# product a data overlay (see profiles/coreteller.tenant-b.yaml) instead of a
+# re-recording.
+app_id: corebanking
+vendor_product: CoreTeller
+product_version: "4.2"
+tenant_id: first-meridian
+
+outcomes:
+  - code: record_not_found
+    description: No member exists with the supplied member id.
+  - code: permission_denied
+    description: The operator is not authorized to view this record.
+  - code: validation_rejected
+    description: The submitted form was rejected by a field-level validation rule.
+
+signals:
+  # --- legitimate answers the caller needs -------------------------------
+  - code: record_not_found
+    classification: business
+    text_present: "No records located"
+    message: "No member exists with that id."
+    handler: return
+  - code: permission_denied
+    classification: business
+    text_present: "not authorized to view this record"
+    message: "The operator is not authorized to view this record."
+    handler: return
+
+  - code: validation_rejected
+    classification: business
+    text_present: "Field in error"
+    message: "The form was rejected by a field-level validation rule."
+    handler: return
+
+  # --- handled inline; the caller never hears about these ----------------
+  - code: maintenance_interstitial
+    classification: recoverable
+    text_present: "scheduled maintenance window is pending"
+    message: "Dismissing the maintenance interstitial."
+    handler: dismiss
+    max_attempts: 2
+  - code: session_expired
+    classification: recoverable
+    text_present: "Your session has expired"
+    message: "Session expired; re-authenticating."
+    handler: reauth
+    max_attempts: 1
+
+  # --- genuinely broken ---------------------------------------------------
+  - code: application_error
+    classification: hard
+    text_present: "Unhandled exception"
+    message: "The application returned an error page."

@@ -1,0 +1,32 @@
+{
+  "run_id": "replay-20260910T230742Z",
+  "kind": "replay",
+  "capability_id": "cap-discovery-7c73a918bd18",
+  "started_at": "2026-09-10T23:07:42.048+00:00",
+  "ended_at": "2026-09-10T23:09:56.850+00:00",
+  "steps": 5,
+  "final_outcome": {
+    "kind": "success",
+    "capability_id": "cap-discovery-7c73a918bd18",
+    "outputs": {
+      "savings_balance": "$ 4,182.55"
+    },
+    "steps_executed": 3,
+    "tier_escalations": 0,
+    "evidence_dir": "evidence/runs/replay-20260910T230742Z"
+  },
+  "attachments": [],
+  "environment": {
+    "python": "3.13.3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "hostname": "Mac",
+    "pid": 34796
+  },
+  "redaction": {
+    "enabled": true,
+    "bound_params": [
+      "member_id"
+    ]
+  }
+}

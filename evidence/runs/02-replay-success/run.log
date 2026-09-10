@@ -1,0 +1,3 @@
+2026-09-10T23:02:40.395+00:00 INFO    replay cap-discovery-7c73a918bd18@1.0.0 (full)
+2026-09-10T23:04:22.435+00:00 WARN    DRIFT step=s3 resolved at tier 4, baseline 1 (candidates=1)
+2026-09-10T23:04:42.828+00:00 INFO    run finished: Success

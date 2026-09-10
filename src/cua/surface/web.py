@@ -32,6 +32,7 @@ import contextlib
 import os
 import re
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -902,7 +903,11 @@ class WebSurface:
 
     def snapshot(self, label: str) -> str | None:
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-") or "snapshot"
-        path = Path(self.config.evidence_dir) / f"{int(time.time() * 1000)}-{safe}.png"
+        # A UTC timestamp rather than epoch milliseconds: a 13-digit run looks
+        # like a card number to the redaction filter, which then scrubs the
+        # filename and breaks the evidence reference it was meant to protect.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        path = Path(self.config.evidence_dir) / f"{stamp}-{safe}.png"
         try:
             self.page.screenshot(path=str(path), full_page=True)
         except Exception:

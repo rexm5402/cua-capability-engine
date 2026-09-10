@@ -1,0 +1,21 @@
+{
+  "run_id": "discovery-20260910T225700Z",
+  "kind": "discovery",
+  "capability_id": null,
+  "started_at": "2026-09-10T22:57:00.074+00:00",
+  "ended_at": "2026-09-10T22:58:58.270+00:00",
+  "steps": 3,
+  "final_outcome": null,
+  "attachments": [],
+  "environment": {
+    "python": "3.13.3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "hostname": "Mac",
+    "pid": 34395
+  },
+  "redaction": {
+    "enabled": false,
+    "bound_params": []
+  }
+}
