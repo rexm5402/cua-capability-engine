@@ -93,8 +93,19 @@ class OpenAICompatClient:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 2048,
     ) -> LLMResponse:
+        import ssl
         import urllib.error
         import urllib.request
+
+        # python.org builds on macOS ship without a CA bundle, so verification
+        # fails against every https endpoint. Use certifi when present rather
+        # than disabling verification -- an API key travels on this request.
+        try:
+            import certifi
+
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ctx = ssl.create_default_context()
 
         body: dict[str, Any] = {
             "model": self._model,
@@ -115,7 +126,7 @@ class OpenAICompatClient:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with urllib.request.urlopen(req, timeout=120, context=ctx) as r:
                 payload = json.loads(r.read())
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"LLM call failed {e.code}: {e.read()[:500]!r}") from e
@@ -140,6 +151,15 @@ def build_client(provider: str | None = None, model: str | None = None) -> LLMCl
             model=model or os.environ.get("CUA_LLM_MODEL", "grok-4"),
             base_url="https://api.x.ai/v1",
             env_key="XAI_API_KEY",
+        )
+    if provider in {"nvidia", "nim"}:
+        # NVIDIA NIM speaks the OpenAI Chat Completions shape, so it needs no
+        # adapter of its own -- which is the point of keeping the discovery
+        # agent provider-agnostic.
+        return OpenAICompatClient(
+            model=model or os.environ.get("CUA_LLM_MODEL", "deepseek-ai/deepseek-v3.1"),
+            base_url="https://integrate.api.nvidia.com/v1",
+            env_key="NVIDIA_API_KEY",
         )
     if provider == "openai":
         return OpenAICompatClient(
